@@ -108,8 +108,8 @@ single tuned τ.
 ## 6. Conclusion
 
 Most of the gain came from recall: at full scale, generic Indian names and native-script spellings made plain token
-blocking lose 8.5% of true links. A lexicon learned from the labels and name×city keys recover most of them at a
-similar candidate budget. The precision-weighted metric is then handled by a context-aware matcher, a one-S1-per-target
+blocking lose 8.5% of true links. A lexicon learned from the labels and name×city keys recover most of them
+(at 48 instead of 29 candidates per S1). The precision-weighted metric is then handled by a context-aware matcher, a one-S1-per-target
 constraint and a threshold tuned directly on macro F0.5.
 
 ---
