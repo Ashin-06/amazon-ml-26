@@ -173,6 +173,11 @@ def macro_f05(truth, pred, all_sids):
     return tot / len(all_sids)
 
 
+def hold_rule(col, hold_mod):
+    """SQL predicate selecting holdout S1s (~1/hold_mod of references)."""
+    return f"(hash({col} || 'hold26') % {hold_mod} = 0)"
+
+
 def _params(threads, seed):
     return dict(objective="binary", learning_rate=0.05, num_leaves=127, min_data_in_leaf=100,
                 feature_fraction=0.8, bagging_fraction=0.8, bagging_freq=1, lambda_l2=1.0,
@@ -198,7 +203,7 @@ def _predict_stage1(con, models, where, threads, chunks, tmp=None, tag=""):
     return pd.concat(keys, ignore_index=True), np.concatenate(p1)
 
 
-def train(work, gt_path, n_train=300_000, n_hold=100_000, mem="20GB", threads=None, seed=26, rounds=600,
+def train(work, gt_path, n_train=300_000, hold_mod=22, mem="20GB", threads=None, seed=26, rounds=600,
           chunks=8):
     t0 = time.time()
     lg = lambda msg: print(f"[train {time.time() - t0:.0f}s] {msg}", flush=True)  # noqa: E731
@@ -208,10 +213,12 @@ def train(work, gt_path, n_train=300_000, n_hold=100_000, mem="20GB", threads=No
           FROM '{gt_path}' WHERE coalesce(matched_entity_ids, '') <> '') g
         JOIN rec a ON a.entity_id = g.s JOIN rec b ON b.entity_id = g.t""")
     # Disjoint S1 groups by a seeded hash of the entity id (never used as a feature).
+    # Holdout = fixed hash rule shared with the lexicon step (which excludes these S1s).
     half = n_train // 2
     con.execute(f"""CREATE TABLE split AS SELECT rid AS sid,
-          CASE WHEN h < {half} THEN 'A' WHEN h < {n_train} THEN 'B' WHEN h < {n_train + n_hold} THEN 'hold' END AS g
-        FROM (SELECT rid, row_number() OVER (ORDER BY hash(entity_id || '{seed}')) - 1 AS h FROM rec WHERE src = 1)""")
+          CASE WHEN ho THEN 'hold' WHEN h < {half} THEN 'A' WHEN h < {n_train} THEN 'B' END AS g
+        FROM (SELECT rid, ho, row_number() OVER (PARTITION BY ho ORDER BY hash(entity_id || 'ab')) - 1 AS h
+              FROM (SELECT rid, entity_id, {hold_rule('entity_id', hold_mod)} AS ho FROM rec WHERE src = 1))""")
     data = {}
     for g in ("A", "B", "hold"):
         df = _pairs(con, f"c.sid IN (SELECT sid FROM split WHERE g = '{g}')")

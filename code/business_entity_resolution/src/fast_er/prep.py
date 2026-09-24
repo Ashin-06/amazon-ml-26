@@ -1,7 +1,8 @@
 """Stage 1: normalize every record of one split into work/<split>/norm_s{1,2,3}.parquet.
 
 Columns: rid (int, row id within split), src (1/2/3), entity_id, country,
-name (normalized), core (name without legal/stop words), addr (normalized).
+name (normalized), core (name without legal/stop words), addr (normalized),
+na (original name was non-ASCII, i.e. transliterated).
 Non-ASCII text (Indic scripts, French accents) is transliterated with anyascii
 so cross-script pairs share a Latin view. No external lookups.
 """
@@ -56,6 +57,10 @@ STATES = {
     "uttar pradesh": "up", "uttarakhand": "uk", "uttaranchal": "uk", "west bengal": "wb", "delhi": "dl",
     "new delhi": "dl", "chandigarh": "ch", "puducherry": "py", "pondicherry": "py",
     "jammu and kashmir": "jk", "jammu & kashmir": "jk",
+    # anyascii forms of native-script state names (mined from supplied India target addresses)
+    "mharastr": "mh", "dilli": "dl", "uttr prdes": "up", "krnatk": "ka", "tmilnatu": "tn", "pscimbng": "wb",
+    "gujrat": "gj", "telmgan": "tg", "hriyana": "hr", "rajsthan": "rj", "kerlm": "kl", "mdhy prdes": "mp",
+    "amdhrprdes": "ap", "pmjab": "pb", "od'isa": "od",
 }
 STATE_RE = re.compile(r"\b(" + "|".join(sorted(map(re.escape, STATES), key=len, reverse=True)) + r")\b")
 # Dropped from the 'core' name view (legal forms, generic filler).
@@ -79,8 +84,13 @@ def norm(text, states=False):
 def _chunk(cols):
     ids, names, addrs, countries = cols
     name = [norm(x) for x in names]
-    core = [" ".join(t for t in n.split() if t not in LEGAL) or n for n in name]
-    return ids, [norm(x) for x in countries], name, core, [norm(x, states=True) for x in addrs]
+    return (ids, [norm(x) for x in countries], name, [core_of(n) for n in name],
+            [norm(x, states=True) for x in addrs], [not (x or "").isascii() for x in names])
+
+
+def core_of(name):
+    """Name without legal forms / filler words (falls back to the full name)."""
+    return " ".join(t for t in name.split() if t not in LEGAL) or name
 
 
 def prepare(split, pq_dir="work/pq", out_dir="work", workers=8):
@@ -102,10 +112,11 @@ def prepare(split, pq_dir="work/pq", out_dir="work", workers=8):
                        for b in pf.iter_batches(batch_size=100_000))
             tmp = path.with_suffix(".tmp")
             writer = None
-            for ids, country, name, core, addr in pool.imap(_chunk, batches):
+            for ids, country, name, core, addr, na in pool.imap(_chunk, batches):
                 table = pa.table({"rid": pa.array(range(rid, rid + len(ids)), pa.int32()),
                                   "src": pa.array([src] * len(ids), pa.int8()),
-                                  "entity_id": ids, "country": country, "name": name, "core": core, "addr": addr})
+                                  "entity_id": ids, "country": country, "name": name, "core": core, "addr": addr,
+                                  "na": pa.array(na, pa.bool_())})
                 writer = writer or pq.ParquetWriter(tmp, table.schema)
                 writer.write_table(table)
                 rid += len(ids)
