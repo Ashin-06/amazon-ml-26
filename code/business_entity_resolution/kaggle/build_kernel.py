@@ -26,6 +26,8 @@ W = "/kaggle/working/work"
 if prev and not os.path.exists(W):  # reuse an earlier kernel's stage-1 output
     subprocess.run(["cp", "-r", os.path.dirname(os.path.dirname(prev[0])), W], check=True)
 print("PQ", PQ, "stages", STAGES, "cpus", os.cpu_count(), flush=True)
+import importlib.metadata as _md
+print("versions", {p: _md.version(p) for p in ("duckdb", "lightgbm", "rapidfuzz", "numpy", "pandas", "pyarrow", "anyascii")}, flush=True)
 sys.path.insert(0, "/kaggle/working")
 t0 = time.time()
 def run(*args):
