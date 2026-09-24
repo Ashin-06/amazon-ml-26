@@ -1,0 +1,619 @@
+{
+  "audit_date": "2026-09-25",
+  "files": {
+    "test_source1.tsv": {
+      "rows": 1732544,
+      "bytes": 175022086,
+      "columns": [
+        "entity_id",
+        "business_name",
+        "business_address",
+        "country"
+      ],
+      "country_counts_and_missingness": {
+        "US": {
+          "rows": 663106
+        },
+        "France": {
+          "rows": 259452,
+          "non_ascii_business_address": 73335,
+          "non_ascii_business_name": 40789
+        },
+        "India": {
+          "rows": 809986,
+          "non_ascii_business_address": 465
+        }
+      },
+      "duplicate_entity_ids": 0,
+      "malformed_rows": 0,
+      "lengths": {
+        "business_name": {
+          "mean": 23.83642608788002,
+          "max": 92
+        },
+        "business_address": {
+          "mean": 57.213179578700455,
+          "max": 268
+        }
+      },
+      "examples": {
+        "US": [
+          {
+            "entity_id": "S1-714132312",
+            "business_name": "Zephay Labs Inc",
+            "business_address": "2621 Cotten Road, Tyler, TX",
+            "country": "US"
+          },
+          {
+            "entity_id": "S1-106407869",
+            "business_name": "Vision Partners Corp",
+            "business_address": "IA, Iowa City, 1064 Newton Rd, Unit 11",
+            "country": "US"
+          },
+          {
+            "entity_id": "S1-909865979",
+            "business_name": "Cure Seafood",
+            "business_address": "1325 Brooklyn Walk, Issaquah, WA",
+            "country": "US"
+          }
+        ],
+        "France": [
+          {
+            "entity_id": "S1-156285671",
+            "business_name": "<< Team Ecole",
+            "business_address": "175 Boulevard du Président Franklin Roosevelt, Bordeaux, Nouvelle-Aquitaine",
+            "country": "France"
+          },
+          {
+            "entity_id": "S1-921369899",
+            "business_name": "ZNB Club SARL",
+            "business_address": "Nouvelle-Aquitaine, La Teste-de-Buch, 5 bis Rue Pierre Dignac",
+            "country": "France"
+          },
+          {
+            "entity_id": "S1-913506265",
+            "business_name": "Thermal & Fils SASU",
+            "business_address": "20 Rue Parmentier, Dunkerque, Hauts-de-France",
+            "country": "France"
+          }
+        ],
+        "India": [
+          {
+            "entity_id": "S1-689823050",
+            "business_name": "Red Perfect Trading",
+            "business_address": "Mirzapur, Ews 12, Uttar Pradesh, Mirzapursadar, Awas Vikas Colony",
+            "country": "India"
+          },
+          {
+            "entity_id": "S1-481669221",
+            "business_name": "Nandlal Kisan LLP",
+            "business_address": "D-61 Ifs Apartmentmayur Vihar I, New Delhi, East Delhi, Delhi",
+            "country": "India"
+          },
+          {
+            "entity_id": "S1-280204013",
+            "business_name": "Om Constructions Pvt Ltd",
+            "business_address": "Karauli, Rajasthan, Karauli, Pani Ki Tanki Ke Pas Choubepada",
+            "country": "India"
+          }
+        ]
+      }
+    },
+    "test_source2.tsv": {
+      "rows": 4887273,
+      "bytes": 509456422,
+      "columns": [
+        "entity_id",
+        "business_name",
+        "business_address",
+        "country"
+      ],
+      "country_counts_and_missingness": {
+        "India": {
+          "rows": 2312565,
+          "non_ascii_business_address": 551461,
+          "non_ascii_business_name": 638614,
+          "missing_business_address": 52764
+        },
+        "France": {
+          "rows": 703378,
+          "non_ascii_business_name": 172617,
+          "non_ascii_business_address": 169163,
+          "missing_business_address": 21537
+        },
+        "US": {
+          "rows": 1871330,
+          "non_ascii_business_name": 116927,
+          "missing_business_address": 55107,
+          "non_ascii_business_address": 41
+        }
+      },
+      "duplicate_entity_ids": 0,
+      "malformed_rows": 0,
+      "lengths": {
+        "business_name": {
+          "mean": 25.703646184692364,
+          "max": 102
+        },
+        "business_address": {
+          "mean": 50.413405594490015,
+          "max": 269
+        }
+      },
+      "examples": {
+        "India": [
+          {
+            "entity_id": "S2-192345572",
+            "business_name": "Brahma Infosoft",
+            "business_address": "COIMATORE COLONY, HUNSUR TQMYSORE DIST., Karnataka",
+            "country": "India"
+          },
+          {
+            "entity_id": "S2-910351373",
+            "business_name": "PVT. INDUSTRIES PMB LEASING LIMITED",
+            "business_address": "SURAT, OFFICE NO. 03038, TRADE HOUSE, NEAR RUSHABH PETROL PUMP, RING ROAD, Gujarat, SURAT",
+            "country": "India"
+          },
+          {
+            "entity_id": "S2-229677112",
+            "business_name": "Clm Agro [Limited]",
+            "business_address": "G-B3/5, T V INDUSTRIAL ESTATE 248/A, S K AHIRE MARG, WORLI, Maharashtra",
+            "country": "India"
+          }
+        ],
+        "France": [
+          {
+            "entity_id": "S2-566025912",
+            "business_name": "Marina Ecole France Sarl",
+            "business_address": "63 R. DE DIEPPE, LILLE, Hauts-de-France",
+            "country": "France"
+          },
+          {
+            "entity_id": "S2-158121477",
+            "business_name": "SCI Ptit Àmicale",
+            "business_address": "18 RUE JEN ZAY, Dunkerque, Nord",
+            "country": "France"
+          },
+          {
+            "entity_id": "S2-770341988",
+            "business_name": "sci ligue ici parents",
+            "business_address": "NO. 5 ALLÉE DES HÊTRES, Pornic, Loire-Atlantique",
+            "country": "France"
+          }
+        ],
+        "US": [
+          {
+            "entity_id": "S2-89663826",
+            "business_name": "Apex Summit",
+            "business_address": "67 KENTUCKY ST, SALYERSVILLE, KY",
+            "country": "US"
+          },
+          {
+            "entity_id": "S2-884102769",
+            "business_name": "Fresh Truist",
+            "business_address": "8264 FILLY COURT, ROANOKE COUNTY, VA",
+            "country": "US"
+          },
+          {
+            "entity_id": "S2-375151053",
+            "business_name": "A DIAMOND  SHORT LLC",
+            "business_address": "126-B New Line Road, MORRISTOWN, TN",
+            "country": "US"
+          }
+        ]
+      }
+    },
+    "test_source3.tsv": {
+      "rows": 5082316,
+      "bytes": 506002772,
+      "columns": [
+        "entity_id",
+        "business_name",
+        "business_address",
+        "country"
+      ],
+      "country_counts_and_missingness": {
+        "India": {
+          "rows": 2405000,
+          "non_ascii_business_name": 437903,
+          "non_ascii_business_address": 551274,
+          "missing_business_address": 59240
+        },
+        "France": {
+          "rows": 731615,
+          "non_ascii_business_name": 175185,
+          "non_ascii_business_address": 177914,
+          "missing_business_address": 21541
+        },
+        "US": {
+          "rows": 1945701,
+          "non_ascii_business_name": 124427,
+          "missing_business_address": 55317,
+          "non_ascii_business_address": 34
+        }
+      },
+      "duplicate_entity_ids": 0,
+      "malformed_rows": 0,
+      "lengths": {
+        "business_name": {
+          "mean": 25.65519440349636,
+          "max": 103
+        },
+        "business_address": {
+          "mean": 48.74047087981149,
+          "max": 267
+        }
+      },
+      "examples": {
+        "India": [
+          {
+            "entity_id": "S3-462677478",
+            "business_name": "मॉडर्न फाइनेंस",
+            "business_address": "No 10 Enkay Square, 448A, Udyog Vihar Phase V, Gurugram, Gurgaon, HR",
+            "country": "India"
+          },
+          {
+            "entity_id": "S3-374810425",
+            "business_name": "Shri Sai Infratech Co",
+            "business_address": "3/115, East Delhi, DL",
+            "country": "India"
+          },
+          {
+            "entity_id": "S3-10300249",
+            "business_name": "Shri Supreme Consulting Private  (Limited)",
+            "business_address": "H.no 910 A 3503, Mumbai, महाराष्ट्र",
+            "country": "India"
+          }
+        ],
+        "France": [
+          {
+            "entity_id": "S3-198586129",
+            "business_name": "Fractales Amis Groupe S.A.S",
+            "business_address": "23 Rue Icmre, La Teste-de-buch, Gironde",
+            "country": "France"
+          },
+          {
+            "entity_id": "S3-934627663",
+            "business_name": "Dunkerque Club",
+            "business_address": "13 Rue Jules Andrieu, Dunkerque",
+            "country": "France"
+          },
+          {
+            "entity_id": "S3-92755938",
+            "business_name": "Engages Àrt Pharmacie SCI",
+            "business_address": "250 R De Lille, Roubaix, Hauts-de-France",
+            "country": "France"
+          }
+        ],
+        "US": [
+          {
+            "entity_id": "S3-150632472",
+            "business_name": "Pace Mfa PC",
+            "business_address": "2132 Thomas Run Road, Bel Air, Maryland",
+            "country": "US"
+          },
+          {
+            "entity_id": "S3-468731115",
+            "business_name": "Inc Arden's Tire Shop",
+            "business_address": "129 Bridge Street, PMB 9302, Hillsborough, North Carolina",
+            "country": "US"
+          },
+          {
+            "entity_id": "S3-185659081",
+            "business_name": "INC. DELTAVERA GROWTH",
+            "business_address": "1514 Westhaven Drive, Raleigh, North Carolina",
+            "country": "US"
+          }
+        ]
+      }
+    },
+    "train_source1.tsv": {
+      "rows": 2206821,
+      "bytes": 210069713,
+      "columns": [
+        "entity_id",
+        "business_name",
+        "business_address",
+        "country"
+      ],
+      "country_counts_and_missingness": {
+        "US": {
+          "rows": 1323633
+        },
+        "India": {
+          "rows": 883188,
+          "non_ascii_business_address": 554
+        }
+      },
+      "duplicate_entity_ids": 0,
+      "malformed_rows": 0,
+      "lengths": {
+        "business_name": {
+          "mean": 24.03440333402664,
+          "max": 105
+        },
+        "business_address": {
+          "mean": 52.06621289175697,
+          "max": 256
+        }
+      },
+      "examples": {
+        "US": [
+          {
+            "entity_id": "S1-925783039",
+            "business_name": "Orelee's Barbershop",
+            "business_address": "1795 Westchester Drive, High Point, NC",
+            "country": "US"
+          },
+          {
+            "entity_id": "S1-773889195",
+            "business_name": "Prime Money",
+            "business_address": "17560 Ellis Road, Tahlequah, OK",
+            "country": "US"
+          },
+          {
+            "entity_id": "S1-377745466",
+            "business_name": "B+ Retail Inc",
+            "business_address": "1712 Montebello Avenue, Phoenix, AZ",
+            "country": "US"
+          }
+        ],
+        "India": [
+          {
+            "entity_id": "S1-755362802",
+            "business_name": "Prabhav Business Center",
+            "business_address": "797, Lake Town Block A, Kolkata, Howrah, West Bengal",
+            "country": "India"
+          },
+          {
+            "entity_id": "S1-785847572",
+            "business_name": "Consulting Nyasa Nursing Private Limited",
+            "business_address": "2505, Tower 1, Oakwood, Runwal Greens, Mulund Goreagon Link Road, Near Fortis Hospital, Bhandup West, Mumbai, Maharashtra",
+            "country": "India"
+          },
+          {
+            "entity_id": "S1-564729135",
+            "business_name": "Dream Construction Limited",
+            "business_address": "H.No.16-11-23/37/A, 2Nd Floor, Flat No.207, Sagar Hotel Building, Opp.Rta Office, Mo, Osarambagh, Hyderabad, Telangana",
+            "country": "India"
+          }
+        ]
+      }
+    },
+    "train_source2.tsv": {
+      "rows": 5034616,
+      "bytes": 489301488,
+      "columns": [
+        "entity_id",
+        "business_name",
+        "business_address",
+        "country"
+      ],
+      "country_counts_and_missingness": {
+        "India": {
+          "rows": 2017799,
+          "non_ascii_business_name": 562437,
+          "non_ascii_business_address": 478396,
+          "missing_business_address": 57846
+        },
+        "US": {
+          "rows": 3016817,
+          "non_ascii_business_name": 202171,
+          "missing_business_address": 111121,
+          "non_ascii_business_address": 57
+        }
+      },
+      "duplicate_entity_ids": 0,
+      "malformed_rows": 0,
+      "lengths": {
+        "business_name": {
+          "mean": 25.103574930044317,
+          "max": 104
+        },
+        "business_address": {
+          "mean": 46.22590858965212,
+          "max": 249
+        }
+      },
+      "examples": {
+        "India": [
+          {
+            "entity_id": "S2-166376419",
+            "business_name": "राम मार्केटिंग प्राइवेट लिमिटेड",
+            "business_address": "KH NO. -570/13, NEW DELHI, WEST DELHI, Delhi",
+            "country": "India"
+          },
+          {
+            "entity_id": "S2-639257739",
+            "business_name": "आदित्य प्रॉपर्टीज एलएलपी",
+            "business_address": "G-3/571, GULMOHAR COLONY, BHOPAL, Madhya Pradesh",
+            "country": "India"
+          },
+          {
+            "entity_id": "S2-584977605",
+            "business_name": "SHIVSHAKTI VIDYALAYA VIDYALAYA OVERSEAS CORPORATION | www.shivshakti.com",
+            "business_address": "H.NO 204 C ROAD HOSHIARPUR, PUNJAB, Punjab",
+            "country": "India"
+          }
+        ],
+        "US": [
+          {
+            "entity_id": "S2-764573417",
+            "business_name": "-- Holloway Peak Inc Seafood",
+            "business_address": "105 ELM ST, MORGANTON, NC",
+            "country": "US"
+          },
+          {
+            "entity_id": "S2-163963287",
+            "business_name": "Summit Inc",
+            "business_address": "GREENSBORO, NC, 19 1/2 STARDUST TRAIL",
+            "country": "US"
+          },
+          {
+            "entity_id": "S2-49942811",
+            "business_name": "Delta Tetlecommunication Inc",
+            "business_address": "914 PIERPONT AVE, CLEVELAND, OH",
+            "country": "US"
+          }
+        ]
+      }
+    },
+    "train_source3.tsv": {
+      "rows": 5285603,
+      "bytes": 503705637,
+      "columns": [
+        "entity_id",
+        "business_name",
+        "business_address",
+        "country"
+      ],
+      "country_counts_and_missingness": {
+        "US": {
+          "rows": 3170056,
+          "non_ascii_business_name": 215565,
+          "missing_business_address": 110968,
+          "non_ascii_business_address": 52
+        },
+        "India": {
+          "rows": 2115547,
+          "missing_business_address": 64948,
+          "non_ascii_business_address": 476536,
+          "non_ascii_business_name": 391172
+        }
+      },
+      "duplicate_entity_ids": 0,
+      "malformed_rows": 0,
+      "lengths": {
+        "business_name": {
+          "mean": 25.202143823514554,
+          "max": 123
+        },
+        "business_address": {
+          "mean": 46.71443731207206,
+          "max": 240
+        }
+      },
+      "examples": {
+        "US": [
+          {
+            "entity_id": "S3-202863386",
+            "business_name": "wilfordhancock.com",
+            "business_address": "Mack Rd, Haltom City, Texas",
+            "country": "US"
+          },
+          {
+            "entity_id": "S3-22467283",
+            "business_name": "LLC Moncada Léarning Center",
+            "business_address": "5780 Fawn Ct, Fort Worth, Texas",
+            "country": "US"
+          },
+          {
+            "entity_id": "S3-671162755",
+            "business_name": "Moyna's Coffee",
+            "business_address": "1 Ivanhoe Ave, PO Box 6009, Cincinnati, Ohio",
+            "country": "US"
+          }
+        ],
+        "India": [
+          {
+            "entity_id": "S3-859268022",
+            "business_name": "International South Consultants Private Ltd",
+            "business_address": "",
+            "country": "India"
+          },
+          {
+            "entity_id": "S3-960981775",
+            "business_name": "Pvt. EFS Print Ventures Ltd.",
+            "business_address": "Door No 183, 41St Cross, 22Nd Main 9Th Block Jayanagar, Bengaluru Urban, Bangalore, ಕರ್ನಾಟಕ",
+            "country": "India"
+          },
+          {
+            "entity_id": "S3-53737228",
+            "business_name": "Indian Care Public Limited",
+            "business_address": "Raebareli, Rae Bareli, Raibareilly, UP, No #51 C/o Shiv Kumar Maurya S/o Ram Ausan Bastepur",
+            "country": "India"
+          }
+        ]
+      }
+    }
+  },
+  "sampling": "S1 numeric ID modulo 1000 equals 7; sampled positive pairs are diagnostics, not validation.",
+  "ground_truth": {
+    "rows": 2206821,
+    "positive_links": 7638365,
+    "singleton_rows": 123247,
+    "singleton_fraction": 0.05584820880352326,
+    "match_count_histogram": {
+      "0": 123247,
+      "1": 119157,
+      "2": 375212,
+      "3": 530841,
+      "4": 484115,
+      "5": 321957,
+      "6": 164868,
+      "7": 63968,
+      "8": 18680,
+      "9": 4205,
+      "10": 534,
+      "11": 37
+    },
+    "match_count_quantiles": {
+      "min": 0.0,
+      "p50": 3.0,
+      "p90": 6.0,
+      "p95": 6.0,
+      "p99": 8.0,
+      "max": 11.0
+    },
+    "duplicate_reference_rows": 0,
+    "within_list_duplicate_ids": 0,
+    "diagnostic_sample_entities": 2165,
+    "unknown_reference_ids": 0,
+    "source1_without_label": 0,
+    "by_country": {
+      "US": {
+        "entities": 1323633,
+        "positive_links": 4578522,
+        "singletons": 73896,
+        "singleton_fraction": 0.055828163849042746
+      },
+      "India": {
+        "entities": 883188,
+        "positive_links": 3059843,
+        "singletons": 49351,
+        "singleton_fraction": 0.05587825015738439
+      }
+    },
+    "source2_links": {
+      "links": 3693619,
+      "unique_targets": 3693619,
+      "repeated_target_links": 0,
+      "unknown_targets": 0,
+      "country_mismatched_links": 0,
+      "unmatched_target_records": 1340997
+    },
+    "source3_links": {
+      "links": 3944746,
+      "unique_targets": 3944746,
+      "repeated_target_links": 0,
+      "unknown_targets": 0,
+      "country_mismatched_links": 0,
+      "unmatched_target_records": 1340857
+    }
+  },
+  "train_test_id_overlap": {
+    "source1": 0,
+    "source2": 0,
+    "source3": 0
+  },
+  "full_pair_space": {
+    "train": 22774876013799,
+    "test": 17272751604416
+  },
+  "within_country_pair_space": {
+    "train": 11839670856657,
+    "test": 6724569566212
+  },
+  "total_tsv_bytes": 2520573701,
+  "elapsed_seconds": 114.43
+}

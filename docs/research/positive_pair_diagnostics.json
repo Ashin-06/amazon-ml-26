@@ -1,0 +1,222 @@
+{
+  "scope": "Sample of positives only; not negative-pair performance or retrieval recall. S1 numeric-ID modulo sample; not used as a validation split.",
+  "reference_entities": 2165,
+  "by_country": {
+    "US": {
+      "positive_pairs": 4503,
+      "exact_normalized_name": 1185,
+      "exact_normalized_address": 399,
+      "name_non_ascii_on_target": 333,
+      "target_address_missing": 212,
+      "both_name_and_address_different": 3003
+    },
+    "India": {
+      "positive_pairs": 3037,
+      "exact_normalized_name": 493,
+      "exact_normalized_address": 229,
+      "name_non_ascii_on_target": 724,
+      "target_address_missing": 103,
+      "both_name_and_address_different": 2342
+    }
+  },
+  "quantiles": {
+    "US": {
+      "name_ratio": {
+        "p05": 0.5945945945945945,
+        "p25": 0.7857142857142857,
+        "p50": 0.9,
+        "p75": 1.0,
+        "p95": 1.0
+      },
+      "address_ratio": {
+        "p05": 0.3910098522167488,
+        "p25": 0.6751872354281993,
+        "p50": 0.8282828282828283,
+        "p75": 0.9180327868852458,
+        "p95": 1.0
+      }
+    },
+    "India": {
+      "name_ratio": {
+        "p05": 0.0888888888888889,
+        "p25": 0.6,
+        "p50": 0.8163265306122449,
+        "p75": 0.9375,
+        "p95": 1.0
+      },
+      "address_ratio": {
+        "p05": 0.2946160635481024,
+        "p25": 0.6103896103896104,
+        "p50": 0.8108108108108109,
+        "p75": 0.9180327868852458,
+        "p95": 1.0
+      }
+    }
+  },
+  "hard_positive_examples": {
+    "India": [
+      {
+        "reference": {
+          "entity_id": "S1-582613007",
+          "business_name": "Food Nursing Home",
+          "business_address": "Survey No. 477 & 489, No. 99, Papparambakkam Village, Thiruvallur, Tamil Nadu",
+          "country": "India"
+        },
+        "target": {
+          "entity_id": "S3-774981419",
+          "business_name": "Umbrazeta Sys",
+          "business_address": "Tamil Nadu, No. 99, Thiruvallur, Papparambakkam Village, Survey No. 477 & 489",
+          "country": "India"
+        },
+        "name_ratio": 0.2,
+        "address_ratio": 0.522
+      },
+      {
+        "reference": {
+          "entity_id": "S1-850725007",
+          "business_name": "City Investments Pvt Ltd",
+          "business_address": "78A Bentick Street Ground Floor, Room No-002, Kolkata, Kolkata, Howrah, West Bengal",
+          "country": "India"
+        },
+        "target": {
+          "entity_id": "S2-918786966",
+          "business_name": "সিটি ইনভেস্টমেন্টস প্রাইভেট লিমিটেড",
+          "business_address": "NO ##78A BENTICK STREET GROUND FLOOR, ROOM NO-002, KOLKATA, KOLKATA REGION, KOLKATA, পশ্চিমবঙ্গ",
+          "country": "India"
+        },
+        "name_ratio": 0.102,
+        "address_ratio": 0.771
+      },
+      {
+        "reference": {
+          "entity_id": "S1-850725007",
+          "business_name": "City Investments Pvt Ltd",
+          "business_address": "78A Bentick Street Ground Floor, Room No-002, Kolkata, Kolkata, Howrah, West Bengal",
+          "country": "India"
+        },
+        "target": {
+          "entity_id": "S2-953464199",
+          "business_name": "সিটি ইনভেস্টমেন্টস প্রাইভেট লিমিটেড",
+          "business_address": "DOOR NO ##78A BENTICK STREET GROUND FLOOR, ROOM NO-002, KOLKATA, KOLKATA REGION, KOLKATA, পশ্চিমবঙ্গ",
+          "country": "India"
+        },
+        "name_ratio": 0.102,
+        "address_ratio": 0.749
+      },
+      {
+        "reference": {
+          "entity_id": "S1-749603007",
+          "business_name": "High Finance",
+          "business_address": "Pune, Maharashtra, Sno.28/2D Altus Bld. Flat-B/202, Pune, Pimple Nilakh",
+          "country": "India"
+        },
+        "target": {
+          "entity_id": "S2-180864001",
+          "business_name": "हाई फाइनेंस",
+          "business_address": "BLOCK G-925 SNO.28/2D ALTUS BLD. FLAT-B/202, PIMPLE NILAKH, PUNE, PIMPLE NILAKH, Maharashtra",
+          "country": "India"
+        },
+        "name_ratio": 0.087,
+        "address_ratio": 0.667
+      },
+      {
+        "reference": {
+          "entity_id": "S1-749603007",
+          "business_name": "High Finance",
+          "business_address": "Pune, Maharashtra, Sno.28/2D Altus Bld. Flat-B/202, Pune, Pimple Nilakh",
+          "country": "India"
+        },
+        "target": {
+          "entity_id": "S3-731493407",
+          "business_name": "हाई फाइनेंस",
+          "business_address": "Pune, Sno.28/2d Altus Bld. Flat-b/202, Pune, MH, Pimple Nilakh",
+          "country": "India"
+        },
+        "name_ratio": 0.087,
+        "address_ratio": 0.878
+      }
+    ],
+    "US": [
+      {
+        "reference": {
+          "entity_id": "S1-622358007",
+          "business_name": "Clear Commercial Digital",
+          "business_address": "829 Ayers Street, Memphis, TN",
+          "country": "US"
+        },
+        "target": {
+          "entity_id": "S3-141652453",
+          "business_name": "Dovacira",
+          "business_address": "829 Ayers Street, Memphis, TN",
+          "country": "US"
+        },
+        "name_ratio": 0.25,
+        "address_ratio": 1.0
+      },
+      {
+        "reference": {
+          "entity_id": "S1-856923007",
+          "business_name": "Moses Specialty LLC",
+          "business_address": "6845 South Street, Westmoreland, NY",
+          "country": "US"
+        },
+        "target": {
+          "entity_id": "S2-619077156",
+          "business_name": "Kelodova",
+          "business_address": "6845 SOUTH ST, WESTMORELAND, NY",
+          "country": "US"
+        },
+        "name_ratio": 0.148,
+        "address_ratio": 0.935
+      },
+      {
+        "reference": {
+          "entity_id": "S1-24872007",
+          "business_name": "Main Street Pub",
+          "business_address": "41920 141st Street, North Bend, WA",
+          "country": "US"
+        },
+        "target": {
+          "entity_id": "S2-17206021",
+          "business_name": "ÓNYXCIRATAV0",
+          "business_address": "41920 141ND STREET, NORTH BEND, WA",
+          "country": "US"
+        },
+        "name_ratio": 0.222,
+        "address_ratio": 0.938
+      },
+      {
+        "reference": {
+          "entity_id": "S1-989819007",
+          "business_name": "Angulo Star Citizens Inc",
+          "business_address": "148 Sullivan Lane, Westbury, NY",
+          "country": "US"
+        },
+        "target": {
+          "entity_id": "S3-880731153",
+          "business_name": "Kelopyra",
+          "business_address": "148 Sullivan Lsne, Westbury, New York",
+          "country": "US"
+        },
+        "name_ratio": 0.188,
+        "address_ratio": 0.875
+      },
+      {
+        "reference": {
+          "entity_id": "S1-30320007",
+          "business_name": "Richards Valley Muniyield PC",
+          "business_address": "1820 Sheepford Road, Lower Allen Township, PA",
+          "country": "US"
+        },
+        "target": {
+          "entity_id": "S3-141230645",
+          "business_name": "Onyxyuma",
+          "business_address": "1820 Sheepford Road, Lower Allen Township, Pennsylvania",
+          "country": "US"
+        },
+        "name_ratio": 0.111,
+        "address_ratio": 0.896
+      }
+    ]
+  }
+}

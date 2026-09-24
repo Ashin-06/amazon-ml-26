@@ -1,0 +1,14 @@
+{
+  "seed": 2026,
+  "top_k": 10,
+  "max_query_tokens": 12,
+  "train_queries": 10000,
+  "tune_queries": 1500,
+  "holdout_queries": 1500,
+  "max_pairs": 750000,
+  "n_estimators": 200,
+  "num_leaves": 31,
+  "min_child_samples": 30,
+  "learning_rate": 0.05,
+  "threads": 2
+}

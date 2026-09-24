@@ -1,0 +1,14 @@
+{
+  "references": 2206821,
+  "macro_f05": 1.0,
+  "true_positive_links": 7638365,
+  "false_positive_links": 0,
+  "false_negative_links": 0,
+  "singletons": 123247,
+  "singleton_accuracy": 1.0,
+  "reference_uniqueness_checked": true,
+  "row_order_independent": true,
+  "check": "Full real training truth scored against itself; identity/scorer verification only, not model accuracy.",
+  "elapsed_seconds": 82.172,
+  "peak_process_rss_mib": 62.5
+}

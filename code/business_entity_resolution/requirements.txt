@@ -1,0 +1,7 @@
+# Versions used for the tested Python 3.12 CPU baseline.
+# Score/validate/index commands themselves use only the standard library.
+numpy==2.4.5
+scipy==1.17.1
+scikit-learn==1.7.2
+lightgbm==4.6.0
+rapidfuzz==3.14.5

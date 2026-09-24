@@ -1,0 +1,18 @@
+{
+  "passed": true,
+  "checks": {
+    "markdown_files": 13,
+    "source_files": 16,
+    "documented_functions_and_methods": 57,
+    "original_inputs_hash_verified": 12,
+    "baseline_config_valid": true
+  },
+  "errors": [],
+  "scope": "Code/docs/input integrity. Model performance and full-scale runtime require separate measurements.",
+  "test_run": {
+    "tests": 51,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  }
+}
