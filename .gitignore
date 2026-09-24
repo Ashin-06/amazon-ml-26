@@ -30,3 +30,4 @@ work/
 *.mp4
 *.pdf
 .benchmarks/
+submissions/*.tsv

@@ -1,1 +1,2 @@
 datetime_ist,file,commit,model,local_cv,public_lb,notes
+2026-09-25 ready,submissions/v1_matching_results.tsv,6fe0e2c,v1 single-stage LGBM + basic blocking,0.94218 (holdout macro F0.5; blocking oracle 0.9656),,not yet uploaded
