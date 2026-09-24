@@ -78,6 +78,7 @@ ORDINALS = {w: f"{i}{'th' if 10 <= i % 100 <= 20 else {1: 'st', 2: 'nd', 3: 'rd'
                                    "fifteenth", "sixteenth", "seventeenth", "eighteenth", "nineteenth",
                                    "twentieth"], 1)}
 ORDINALS.update({"thirtieth": "30th", "fortieth": "40th", "fiftieth": "50th"})
+NULLS = {"null", "none", "nan"}
 
 
 def _tok(t):
@@ -97,6 +98,8 @@ def norm(text, states=False):
         text = STATE_RE.sub(lambda m: STATES[m.group(1)], text)
     out = []
     for t in map(_tok, NON_ALNUM.sub(" ", text).split()):
+        if states and t in NULLS:  # literal "null"/"none" noise inside addresses
+            continue
         if not out or out[-1] != t:  # "nature nature" -> "nature"
             out.append(t)
     return " ".join(out)
