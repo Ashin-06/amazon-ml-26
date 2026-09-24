@@ -4,6 +4,9 @@ Every record gets hashed keys, namespaced by country and field:
   name    : core-name tokens (len>=2), adjacent-token concatenations incl. short
             tokens ("n"+"infra" -> "ninfra", "paulita"+"wilson" -> "paulitawilson",
             catches @handles / domains), first-3 concat and whole-name concat.
+  name x address word : each core-name token (len>=3) / whole-name concat joined with
+            each non-numeric address word (any position) ("pioneerinfotech|pune"), so
+            generic names still block within their city. Counted as name evidence.
   address : tokens (len>=3 or containing a digit) and adjacent token bigrams
             ("1550 beverly") that survive component reordering.
 Keys held by more than `cap` targets are dropped (too common to discriminate).
@@ -31,6 +34,15 @@ SELECT rid, src, te, 0::TINYINT AS f, hash(country || '|n|' || k) AS h FROM (
          || list_transform(range(1, len(nt)), i -> nt[i] || nt[i + 1])
          || CASE WHEN len(nt) >= 3 THEN [nt[1] || nt[2] || nt[3]] ELSE [] END
          || CASE WHEN len(nt) >= 2 THEN [array_to_string(nt, '')] ELSE [] END)) AS k
+  FROM t)
+UNION ALL
+-- composite name x address-word keys: "pioneerinfotech|pune" is rare even when both parts are common
+SELECT rid, src, te, 0::TINYINT, hash(country || '|x|' || k) FROM (
+  SELECT rid, src, te, country, unnest(list_distinct(flatten(list_transform(
+      list_distinct(list_filter(nt, x -> length(x) >= 3)
+                    || CASE WHEN len(nt) >= 2 THEN [array_to_string(nt, '')] ELSE [] END),
+      n -> list_transform(list_distinct(list_filter(atok, x -> length(x) >= 3 AND NOT regexp_matches(x, '^[0-9]+$'))),
+                          a -> n || '|' || a))))) AS k
   FROM t)
 UNION ALL
 SELECT rid, src, te, 1::TINYINT, hash(country || '|a|' || k) FROM (

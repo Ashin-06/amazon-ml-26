@@ -19,8 +19,8 @@ from .model import hold_rule
 from .prep import core_of
 
 
-def build_lexicon(work, gt_path, hold_mod=22, min_count=3, min_share=0.5):
-    w = Path(work) / "train"
+def build_lexicon(work, gt_path, hold_mod=22, min_count=3, min_share=0.5, split="train"):
+    w = Path(work) / split
     con = duckdb.connect()
     con.execute(f"CREATE VIEW rec AS SELECT * FROM read_parquet('{w}/norm_s*.parquet')")
     rows = con.execute(f"""
