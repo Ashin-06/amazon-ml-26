@@ -1,12 +1,14 @@
 """Stage 2: candidate generation (blocking) with DuckDB set joins.
 
 Every record gets hashed keys, namespaced by country and field:
-  name    : core-name tokens, adjacent-token concatenations ("paulita"+"wilson"
-            -> "paulitawilson", catches @handles / domains), first-3 concat.
+  name    : core-name tokens (len>=2), adjacent-token concatenations incl. short
+            tokens ("n"+"infra" -> "ninfra", "paulita"+"wilson" -> "paulitawilson",
+            catches @handles / domains), first-3 concat and whole-name concat.
   address : tokens (len>=3 or containing a digit) and adjacent token bigrams
             ("1550 beverly") that survive component reordering.
 Keys held by more than `cap` targets are dropped (too common to discriminate).
 Pair score = sum of idf over shared keys (total, name-only, address-only).
+Name-rank ties prefer targets with an empty address (no conflicting evidence).
 Kept per S1: top-`k` by total score  UNION  top-`k_field` by name  UNION
 top-`k_field` by address, so address-only (renamed DBA) and name-only
 (missing address) matches both survive. Output: work/<split>/cands.parquet.
@@ -19,18 +21,20 @@ import duckdb
 KEYS_SQL = """
 CREATE OR REPLACE TABLE keys AS
 WITH t AS (
-  SELECT rid, src, country,
-         list_filter(string_split(core, ' '), x -> length(x) >= 2) AS nt,
+  SELECT rid, src, country, addr = '' AS te,
+         list_filter(string_split(core, ' '), x -> x <> '') AS nt,
          list_filter(string_split(addr, ' '), x -> x <> '') AS atok
   FROM rec)
-SELECT rid, src, 0::TINYINT AS f, hash(country || '|n|' || k) AS h FROM (
-  SELECT rid, src, country, unnest(list_distinct(
-      nt || list_transform(range(1, len(nt)), i -> nt[i] || nt[i + 1])
-         || CASE WHEN len(nt) >= 3 THEN [nt[1] || nt[2] || nt[3]] ELSE [] END)) AS k
+SELECT rid, src, te, 0::TINYINT AS f, hash(country || '|n|' || k) AS h FROM (
+  SELECT rid, src, te, country, unnest(list_distinct(
+      list_filter(nt, x -> length(x) >= 2)
+         || list_transform(range(1, len(nt)), i -> nt[i] || nt[i + 1])
+         || CASE WHEN len(nt) >= 3 THEN [nt[1] || nt[2] || nt[3]] ELSE [] END
+         || CASE WHEN len(nt) >= 2 THEN [array_to_string(nt, '')] ELSE [] END)) AS k
   FROM t)
 UNION ALL
-SELECT rid, src, 1::TINYINT, hash(country || '|a|' || k) FROM (
-  SELECT rid, src, country, unnest(list_distinct(
+SELECT rid, src, te, 1::TINYINT, hash(country || '|a|' || k) FROM (
+  SELECT rid, src, te, country, unnest(list_distinct(
       list_filter(atok, x -> length(x) >= 3 OR regexp_matches(x, '[0-9]'))
       || list_transform(range(1, len(atok)), i -> atok[i] || ' ' || atok[i + 1]))) AS k
   FROM t)
@@ -55,7 +59,7 @@ def block(split, work="work", cap=300, k=25, k_field=10, chunks=8, threads=None,
     con.execute(f"""
         CREATE TABLE post AS
         WITH d AS (SELECT h, count(*) AS df FROM keys WHERE src > 1 GROUP BY h HAVING count(*) <= {cap})
-        SELECT k.h, k.rid AS tid, k.f, ln(1 + {n_t} / d.df)::FLOAT AS w
+        SELECT k.h, k.rid AS tid, k.f, k.te, ln(1 + {n_t} / d.df)::FLOAT AS w
         FROM keys k JOIN d USING (h) WHERE k.src > 1""")
     con.execute("CREATE TABLE q AS SELECT rid AS sid, h FROM keys WHERE src = 1")
     con.execute("DROP TABLE keys")
@@ -72,13 +76,13 @@ def block(split, work="work", cap=300, k=25, k_field=10, chunks=8, threads=None,
                 SELECT q.sid, p.tid, sum(p.w)::FLOAT AS s,
                        coalesce(sum(p.w) FILTER (WHERE p.f = 0), 0)::FLOAT AS sn,
                        coalesce(sum(p.w) FILTER (WHERE p.f = 1), 0)::FLOAT AS sa,
-                       count(*)::SMALLINT AS nk
+                       count(*)::SMALLINT AS nk, bool_or(p.te) AS te
                 FROM q JOIN post p USING (h)
                 WHERE q.sid % {chunks} = {c}
                 GROUP BY q.sid, p.tid),
               r AS (
                 SELECT *, row_number() OVER (PARTITION BY sid ORDER BY s DESC, tid) AS r_s,
-                          row_number() OVER (PARTITION BY sid ORDER BY sn DESC, tid) AS r_n,
+                          row_number() OVER (PARTITION BY sid ORDER BY sn DESC, te DESC, tid) AS r_n,
                           row_number() OVER (PARTITION BY sid ORDER BY sa DESC, tid) AS r_a
                 FROM s)
               SELECT sid, tid, s, sn, sa, nk, r_s::SMALLINT AS r_s,
