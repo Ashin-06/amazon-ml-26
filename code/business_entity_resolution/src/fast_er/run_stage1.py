@@ -1,0 +1,29 @@
+"""Stage 1+2 driver: normalize a split, block it, and (if labels given) report blocking recall.
+
+Usage: python run_stage1.py SPLIT PQ_DIR WORK [GT_PARQUET] [--mem 20GB] [--threads N] [--workers N]
+"""
+import argparse
+import json
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from fast_er.block import block, blocking_recall  # noqa: E402
+from fast_er.prep import prepare  # noqa: E402
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser()
+    ap.add_argument("split"); ap.add_argument("pq_dir"); ap.add_argument("work"); ap.add_argument("gt", nargs="?")
+    ap.add_argument("--mem", default="20GB"); ap.add_argument("--threads", type=int)
+    ap.add_argument("--workers", type=int, default=4); ap.add_argument("--chunks", type=int, default=8)
+    ap.add_argument("--cap", type=int, default=300); ap.add_argument("--k", type=int, default=25)
+    a = ap.parse_args()
+    t = time.time()
+    prepare(a.split, pq_dir=a.pq_dir, out_dir=a.work, workers=a.workers)
+    print(f"[prep {a.split}] {time.time() - t:.0f}s", flush=True)
+    block(a.split, work=a.work, cap=a.cap, k=a.k, chunks=a.chunks, threads=a.threads, mem=a.mem)
+    if a.gt:
+        r = blocking_recall(a.split, work=a.work, gt_path=a.gt)
+        print(json.dumps(r, indent=1))
+        (Path(a.work) / a.split / "blocking_recall.json").write_text(json.dumps(r, indent=1))
