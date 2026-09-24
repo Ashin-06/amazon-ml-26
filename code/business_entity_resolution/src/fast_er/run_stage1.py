@@ -19,6 +19,7 @@ if __name__ == "__main__":
     ap.add_argument("--mem", default="20GB"); ap.add_argument("--threads", type=int)
     ap.add_argument("--workers", type=int, default=4); ap.add_argument("--chunks", type=int, default=8)
     ap.add_argument("--cap", type=int, default=300); ap.add_argument("--hold-mod", type=int, default=22); ap.add_argument("--k", type=int, default=40); ap.add_argument("--k-field", type=int, default=20)
+    ap.add_argument("--cap-whole", type=int, default=1000)
     a = ap.parse_args()
     t = time.time()
     prepare(a.split, pq_dir=a.pq_dir, out_dir=a.work, workers=a.workers)
@@ -27,7 +28,7 @@ if __name__ == "__main__":
         build_lexicon(a.work, a.gt, a.hold_mod, split=a.split)
     if (Path(a.work) / "lexicon.json").exists():
         apply_lexicon(a.work, a.split)
-    block(a.split, work=a.work, cap=a.cap, k=a.k, k_field=a.k_field, chunks=a.chunks, threads=a.threads, mem=a.mem)
+    block(a.split, work=a.work, cap=a.cap, cap_whole=a.cap_whole, k=a.k, k_field=a.k_field, chunks=a.chunks, threads=a.threads, mem=a.mem)
     if a.gt:
         r = blocking_recall(a.split, work=a.work, gt_path=a.gt)
         print(json.dumps(r, indent=1))

@@ -3,15 +3,15 @@
 Every record gets hashed keys, namespaced by country and field:
   name    : core-name tokens (len>=2), adjacent-token concatenations incl. short
             tokens ("n"+"infra" -> "ninfra", "paulita"+"wilson" -> "paulitawilson",
-            catches @handles / domains), first-3 concat and whole-name concat.
-  name x address word : each core-name token (len>=3) / whole-name concat joined with
+            catches @handles / domains), first-3 concat; whole core name (cap `cap_whole`).
+  name x address word : each core-name token (len>=2) / whole-name concat joined with
             each non-numeric address word (any position) ("pioneerinfotech|pune"), so
             generic names still block within their city. Counted as name evidence.
   address : tokens (len>=3 or containing a digit) and adjacent token bigrams
             ("1550 beverly") that survive component reordering.
 Keys held by more than `cap` targets are dropped (too common to discriminate).
 Pair score = sum of idf over shared keys (total, name-only, address-only).
-Name-rank ties prefer targets with an empty address (no conflicting evidence).
+Name-rank ties: more address evidence first, then an empty address (no conflict) over a conflicting one.
 Kept per S1: top-`k` by total score  UNION  top-`k_field` by name  UNION
 top-`k_field` by address, so address-only (renamed DBA) and name-only
 (missing address) matches both survive. Output: work/<split>/cands.parquet.
@@ -33,15 +33,16 @@ SELECT rid, src, te, 0::TINYINT AS f, hash(country || '|n|' || k) AS h FROM (
   SELECT rid, src, te, country, unnest(list_distinct(
       list_filter(nt, x -> length(x) >= 2)
          || list_transform(range(1, len(nt)), i -> nt[i] || nt[i + 1])
-         || CASE WHEN len(nt) >= 3 THEN [nt[1] || nt[2] || nt[3]] ELSE [] END
-         || CASE WHEN len(nt) >= 2 THEN [array_to_string(nt, '')] ELSE [] END)) AS k
+         || CASE WHEN len(nt) >= 3 THEN [nt[1] || nt[2] || nt[3]] ELSE [] END)) AS k
   FROM t)
+UNION ALL
+-- whole core name (f=2: name evidence with its own, higher document-frequency cap)
+SELECT rid, src, te, 2::TINYINT, hash(country || '|w|' || array_to_string(nt, '')) FROM t WHERE len(nt) >= 1
 UNION ALL
 -- composite name x address-word keys: "pioneerinfotech|pune" is rare even when both parts are common
 SELECT rid, src, te, 0::TINYINT, hash(country || '|x|' || k) FROM (
   SELECT rid, src, te, country, unnest(list_distinct(flatten(list_transform(
-      list_distinct(list_filter(nt, x -> length(x) >= 3)
-                    || CASE WHEN len(nt) >= 2 THEN [array_to_string(nt, '')] ELSE [] END),
+      list_distinct(list_filter(nt, x -> length(x) >= 2) || [array_to_string(nt, '')]),
       n -> list_transform(list_distinct(list_filter(atok, x -> length(x) >= 3 AND NOT regexp_matches(x, '^[0-9]+$'))),
                           a -> n || '|' || a))))) AS k
   FROM t)
@@ -54,7 +55,7 @@ SELECT rid, src, te, 1::TINYINT, hash(country || '|a|' || k) FROM (
 """
 
 
-def block(split, work="work", cap=300, k=25, k_field=10, chunks=8, threads=None, mem="20GB"):
+def block(split, work="work", cap=300, k=25, k_field=10, chunks=8, threads=None, mem="20GB", cap_whole=1000):
     out = Path(work) / split / "cands.parquet"
     if out.exists():
         return out
@@ -71,7 +72,8 @@ def block(split, work="work", cap=300, k=25, k_field=10, chunks=8, threads=None,
     # Target-side postings with document frequency; common keys dropped.
     con.execute(f"""
         CREATE TABLE post AS
-        WITH d AS (SELECT h, count(*) AS df FROM keys WHERE src > 1 GROUP BY h HAVING count(*) <= {cap})
+        WITH d AS (SELECT h, count(*) AS df FROM keys WHERE src > 1 GROUP BY h, f
+                   HAVING count(*) <= CASE WHEN f = 2 THEN {cap_whole} ELSE {cap} END)
         SELECT k.h, k.rid AS tid, k.f, k.te, ln(1 + {n_t} / d.df)::FLOAT AS w
         FROM keys k JOIN d USING (h) WHERE k.src > 1""")
     con.execute("CREATE TABLE q AS SELECT rid AS sid, h FROM keys WHERE src = 1")
@@ -87,7 +89,7 @@ def block(split, work="work", cap=300, k=25, k_field=10, chunks=8, threads=None,
             COPY (
               WITH s AS (
                 SELECT q.sid, p.tid, sum(p.w)::FLOAT AS s,
-                       coalesce(sum(p.w) FILTER (WHERE p.f = 0), 0)::FLOAT AS sn,
+                       coalesce(sum(p.w) FILTER (WHERE p.f <> 1), 0)::FLOAT AS sn,
                        coalesce(sum(p.w) FILTER (WHERE p.f = 1), 0)::FLOAT AS sa,
                        count(*)::SMALLINT AS nk, bool_or(p.te) AS te
                 FROM q JOIN post p USING (h)
@@ -95,7 +97,7 @@ def block(split, work="work", cap=300, k=25, k_field=10, chunks=8, threads=None,
                 GROUP BY q.sid, p.tid),
               r AS (
                 SELECT *, row_number() OVER (PARTITION BY sid ORDER BY s DESC, tid) AS r_s,
-                          row_number() OVER (PARTITION BY sid ORDER BY sn DESC, te DESC, tid) AS r_n,
+                          row_number() OVER (PARTITION BY sid ORDER BY sn DESC, sa DESC, te DESC, tid) AS r_n,
                           row_number() OVER (PARTITION BY sid ORDER BY sa DESC, tid) AS r_a
                 FROM s)
               SELECT sid, tid, s, sn, sa, nk, r_s::SMALLINT AS r_s,
