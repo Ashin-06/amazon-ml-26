@@ -56,7 +56,7 @@ BASE = ["s", "sn", "sa", "nk", "r_s", "r_n", "r_a", "n_c", "s_rel", "s_gap", "t_
 FEATS = BASE + ["n_ratio", "n_tsort", "n_tset", "n_partial", "n_jw", "c_ratio", "c_tset", "c_nospace",
                 "c_exact", "a_ratio", "a_tsort", "a_tset", "a_partial", "t_addr_empty", "len_n_s", "len_n_t",
                 "len_a_s", "len_a_t", "num_jac", "num_common", "num_conflict", "num_first_eq", "s_num_cnt",
-                "t_num_cnt", "hn_ratio", "hn_rel"]
+                "t_num_cnt", "hn_ratio", "hn_rel", "raw_ratio", "raw_partial", "sup_core", "sup_addr"]
 CTX = ["p1", "p1_rank", "p1_max", "p1_sum", "p1_n05", "p1_rel", "p1_trank", "p1_tother", "p1_tdiff", "p1_tn05"]
 FEATS2 = FEATS + CTX
 
@@ -104,6 +104,12 @@ def features(df):
                 a_ratio=d(sa, ta, fuzz.ratio), a_tsort=d(sa, ta, fuzz.token_sort_ratio),
                 a_tset=d(sa, ta, fuzz.token_set_ratio), a_partial=d(sa, ta, fuzz.partial_ratio))
     cols["c_exact"] = np.fromiter((x == y for x, y in zip(sc, tc)), np.float32, len(sc))
+    rs, rt = df["srawn"].tolist(), df["trawn"].tolist()
+    cols.update(raw_ratio=d(rs, rt, fuzz.ratio), raw_partial=d(rs, rt, fuzz.partial_ratio))
+    # Cluster support: true matches come in groups of near-identical variants; decoys stand alone.
+    cols["sup_core"] = df.groupby(["sid", "tcore"]).sid.transform("size").to_numpy(np.float32)
+    sup_a = df.groupby(["sid", "taddr"]).sid.transform("size").to_numpy(np.float32)
+    cols["sup_addr"] = np.where(df["taddr"].to_numpy() == "", -1, sup_a).astype(np.float32)
     cols["t_addr_empty"] = np.fromiter((not x for x in ta), np.float32, len(ta))
     for k, v in (("len_n_s", sn), ("len_n_t", tn), ("len_a_s", sa), ("len_a_t", ta)):
         cols[k] = np.fromiter(map(len, v), np.float32, len(v))
@@ -117,8 +123,8 @@ def features(df):
 def _pairs(con, where):
     """Candidate rows (with group features) joined to both records' normalized text."""
     return con.execute(f"""
-        SELECT c.*, a.name AS sname, a.core AS scor, a.addr AS saddr,
-               b.name AS tname, b.core AS tcore, b.addr AS taddr, b.src AS tsrc,
+        SELECT c.*, a.name AS sname, a.core AS scor, a.addr AS saddr, a.rawn AS srawn,
+               b.name AS tname, b.core AS tcore, b.addr AS taddr, b.src AS tsrc, b.rawn AS trawn,
                a.fc_t AS s_fct, a.fc_s AS s_fcs, a.fa_t AS s_fat,
                b.fc_t AS t_fct, b.fc_s AS t_fcs, b.fa_t AS t_fat
         FROM c JOIN rec a ON a.rid = c.sid JOIN rec b ON b.rid = c.tid WHERE {where}
@@ -132,6 +138,8 @@ def _connect(work, split, mem, threads):
         con.execute(f"SET threads={threads}")
     w = Path(work) / split
     con.execute(REC_SQL.format(w=w))
+    if "rawn" not in [r[0] for r in con.execute("DESCRIBE rec").fetchall()]:  # runs prepared before rawn existed
+        con.execute("ALTER TABLE rec ADD COLUMN rawn VARCHAR; UPDATE rec SET rawn = replace(name, ' ', '')")
     con.execute(GROUP_SQL.format(cands=w / "cands.parquet"))
     return con
 

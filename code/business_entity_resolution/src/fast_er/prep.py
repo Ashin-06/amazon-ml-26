@@ -2,7 +2,7 @@
 
 Columns: rid (int, row id within split), src (1/2/3), entity_id, country,
 name (normalized), core (name without legal/stop words), addr (normalized),
-na (original name was non-ASCII, i.e. transliterated).
+na (original name was non-ASCII, i.e. transliterated), rawn (raw name, no spaces/mapping).
 Non-ASCII text (Indic scripts, French accents) is transliterated with anyascii
 so cross-script pairs share a Latin view. No external lookups.
 """
@@ -105,11 +105,19 @@ def norm(text, states=False):
     return " ".join(out)
 
 
+def raw_joined(text):
+    """Transliterated, lowercase, alphanumerics only, no spaces, no abbreviation mapping."""
+    if not isinstance(text, str) or not text:
+        return ""
+    return NON_ALNUM.sub("", (anyascii(text) if not text.isascii() else text).lower())
+
+
 def _chunk(cols):
     ids, names, addrs, countries = cols
     name = [norm(x) for x in names]
     return (ids, [norm(x) for x in countries], name, [core_of(n) for n in name],
-            [norm(x, states=True) for x in addrs], [not (x or "").isascii() for x in names])
+            [norm(x, states=True) for x in addrs], [not (x or "").isascii() for x in names],
+            [raw_joined(x) for x in names])
 
 
 def core_of(name):
@@ -136,11 +144,11 @@ def prepare(split, pq_dir="work/pq", out_dir="work", workers=8):
                        for b in pf.iter_batches(batch_size=100_000))
             tmp = path.with_suffix(".tmp")
             writer = None
-            for ids, country, name, core, addr, na in pool.imap(_chunk, batches):
+            for ids, country, name, core, addr, na, rawn in pool.imap(_chunk, batches):
                 table = pa.table({"rid": pa.array(range(rid, rid + len(ids)), pa.int32()),
                                   "src": pa.array([src] * len(ids), pa.int8()),
                                   "entity_id": ids, "country": country, "name": name, "core": core, "addr": addr,
-                                  "na": pa.array(na, pa.bool_())})
+                                  "na": pa.array(na, pa.bool_()), "rawn": rawn})
                 writer = writer or pq.ParquetWriter(tmp, table.schema)
                 writer.write_table(table)
                 rid += len(ids)
