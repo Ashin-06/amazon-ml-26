@@ -316,21 +316,33 @@ def predict(work, split, out_dir, mem="20GB", threads=None, chunks=8, tmp=None):
         p2.append(m2.predict(np.hstack([X, _ctx_matrix(con, kk)]), num_threads=threads or 0))
         print(f"  [stage2 {split}] chunk {k + 1}/{chunks} {time.time() - t0:.0f}s", flush=True)
     shutil.rmtree(tmp, ignore_errors=True)
-    sid, tid, p = keys.sid.values, keys.tid.values, np.concatenate(p2)
-    pred = decide(sid, tid, p, thr)
-    ids = con.execute("SELECT rid, entity_id, src FROM rec").df()
-    name = dict(zip(ids.rid, ids.entity_id))
-    s1 = ids[ids.src == 1].rid.tolist()
-    cand = keys.groupby("sid")["tid"].apply(list).to_dict()
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    for fname, col, mapping in (("matching_results.tsv", "matched_entity_ids", pred),
-                                ("candidate_pairs.tsv", "candidate_entity_ids", cand)):
+    pd.DataFrame({"sid": keys.sid.values, "tid": keys.tid.values, "p1": p1, "p": np.concatenate(p2)}).to_parquet(
+        out / "scores.parquet", index=False)
+    del keys, p1, p2
+    n_match, n_s1 = write_outputs(con, out / "scores.parquet", thr, out)
+    print(f"[predict {split}] wrote {n_s1:,} rows, {n_match:,} links ({n_match / n_s1:.2f}/S1) "
+          f"{time.time() - t0:.0f}s", flush=True)
+
+
+def write_outputs(con, scores_path, thr, out):
+    """Decision in DuckDB (p >= thr, then each target to its best S1) and stream both TSVs.
+    Every S1 in `rec` gets exactly one row; lists may be empty. Returns (links, S1 rows)."""
+    out = Path(out)
+    con.execute(f"CREATE OR REPLACE TABLE sc AS SELECT sid, tid, p FROM read_parquet('{scores_path}')")
+    con.execute(f"""CREATE OR REPLACE TABLE pr AS SELECT sid, tid FROM (
+          SELECT sid, tid, row_number() OVER (PARTITION BY tid ORDER BY p DESC, sid) AS r
+          FROM sc WHERE p >= {thr}) WHERE r = 1""")
+    for fname, col, table in (("matching_results.tsv", "matched_entity_ids", "pr"),
+                              ("candidate_pairs.tsv", "candidate_entity_ids", "sc")):
+        cur = con.execute(f"""
+            SELECT s.entity_id, coalesce(string_agg(t.entity_id, ',' ORDER BY t.rid), '')
+            FROM rec s LEFT JOIN {table} x ON x.sid = s.rid LEFT JOIN rec t ON t.rid = x.tid
+            WHERE s.src = 1 GROUP BY s.rid, s.entity_id ORDER BY s.rid""")
         with open(out / fname, "w", encoding="utf-8", newline="\n") as f:
             f.write(f"source1_entity_id\t{col}\n")
-            for s in s1:
-                f.write(name[s] + "\t" + ",".join(name[t] for t in mapping.get(s, ())) + "\n")
-    pd.DataFrame({"sid": sid, "tid": tid, "p1": p1, "p": p}).to_parquet(out / "scores.parquet", index=False)
-    n_match = sum(map(len, pred.values()))
-    print(f"[predict {split}] wrote {len(s1):,} rows, {n_match:,} links ({n_match / len(s1):.2f}/S1) "
-          f"{time.time() - t0:.0f}s", flush=True)
+            while rows := cur.fetchmany(200_000):
+                f.writelines(f"{a}\t{b}\n" for a, b in rows)
+    return (con.execute("SELECT count(*) FROM pr").fetchone()[0],
+            con.execute("SELECT count(*) FROM rec WHERE src = 1").fetchone()[0])
