@@ -232,12 +232,19 @@ def train(work, gt_path, n_train=300_000, hold_mod=22, mem="20GB", threads=None,
               FROM (SELECT rid, entity_id, {hold_rule('entity_id', hold_mod)} AS ho FROM rec WHERE src = 1))""")
     data = {}
     for g in ("A", "B", "hold"):
-        df = _pairs(con, f"c.sid IN (SELECT sid FROM split WHERE g = '{g}')")
         lab = con.execute(f"SELECT sid, tid FROM gt WHERE sid IN (SELECT sid FROM split WHERE g = '{g}')").df()
         key = set(zip(lab.sid, lab.tid))
-        y = np.fromiter(((s, t) in key for s, t in zip(df.sid, df.tid)), np.int8, len(df))
-        data[g] = {"keys": df[["sid", "tid"]].copy(), "X": features(df), "y": y, "lab": lab}
-        lg(f"{g}: {len(df):,} pairs, pos rate {y.mean():.3f}")
+        keys, Xs = [], []
+        for k in range(chunks):  # chunked so only one slice of text rows is in memory at a time
+            df = _pairs(con, f"c.sid IN (SELECT sid FROM split WHERE g = '{g}') AND c.sid % {chunks} = {k}")
+            keys.append(df[["sid", "tid"]].copy())
+            Xs.append(features(df))
+            del df
+        kk = pd.concat(keys, ignore_index=True)
+        y = np.fromiter(((s, t) in key for s, t in zip(kk.sid, kk.tid)), np.int8, len(kk))
+        data[g] = {"keys": kk, "X": np.vstack(Xs), "y": y, "lab": lab}
+        del Xs
+        lg(f"{g}: {len(kk):,} pairs, pos rate {y.mean():.3f}")
     P = _params(threads, seed, leaves, lr)
     m = {g: lgb.train(P, lgb.Dataset(data[g]["X"], data[g]["y"], feature_name=FEATS), rounds) for g in ("A", "B")}
     lg("stage-1 models fitted")
