@@ -1,0 +1,17 @@
+data/
+dataset/
+*.zip
+*.parquet
+models/
+outputs/
+*.pt
+*.bin
+*.safetensors
+kaggle.json
+access_token
+.env
+__pycache__/
+.ipynb_checkpoints/
+submissions/*.csv
+!submissions/log.csv
+KGAT_*
