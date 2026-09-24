@@ -28,6 +28,9 @@ TOKEN_MAP = {
     "floor": "fl", "flr": "fl", "building": "bldg", "number": "no", "num": "no", "nos": "no",
     "house": "h", "hno": "h", "sector": "sec", "near": "nr", "opposite": "opp", "cross": "crs",
     "main": "mn", "nagar": "ngr", "colony": "col", "chemin": "ch", "route": "rte",
+    # French address forms (test-only country)
+    "rue": "r", "allee": "all", "impasse": "imp", "cours": "crs", "quai": "qu", "faubourg": "fbg",
+    "compagnie": "co", "cie": "co",
     # legal forms
     "private": "pvt", "pvt.": "pvt", "limited": "ltd", "incorporated": "inc", "corporation": "corp",
     "company": "co", "and": "&", "et": "&", "services": "svc", "service": "svc",
@@ -66,19 +69,37 @@ STATE_RE = re.compile(r"\b(" + "|".join(sorted(map(re.escape, STATES), key=len, 
 # Dropped from the 'core' name view (legal forms, generic filler).
 LEGAL = {"pvt", "ltd", "inc", "llc", "corp", "co", "lp", "llp", "plc", "pc", "pllc", "the", "&", "of", "a", "k",
          "com", "www", "in", "net", "org", "sa", "sas", "sarl", "eurl", "sci", "public", "india", "group",
-         "dba", "aka", "d", "b", "l", "p", "c", "s"}
+         "dba", "aka", "d", "b", "l", "p", "c", "s", "de", "du", "des", "la", "le", "les", "france"}
+
+
+ORDINALS = {w: f"{i}{'th' if 10 <= i % 100 <= 20 else {1: 'st', 2: 'nd', 3: 'rd'}.get(i % 10, 'th')}"
+            for i, w in enumerate(["first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth",
+                                   "ninth", "tenth", "eleventh", "twelfth", "thirteenth", "fourteenth",
+                                   "fifteenth", "sixteenth", "seventeenth", "eighteenth", "nineteenth",
+                                   "twentieth"], 1)}
+ORDINALS.update({"thirtieth": "30th", "fortieth": "40th", "fiftieth": "50th"})
+
+
+def _tok(t):
+    if t.isdigit():
+        return t.lstrip("0") or "0"  # "014889" == "14889" (zero-padding noise)
+    return TOKEN_MAP.get(t) or ORDINALS.get(t, t)
 
 
 def norm(text, states=False):
-    """Lowercase, transliterate, strip punctuation, canonicalize tokens."""
+    """Lowercase, transliterate, strip punctuation, canonicalize tokens, drop repeated tokens."""
     if not isinstance(text, str) or not text:
         return ""
     if not text.isascii():
-        text = anyascii(text)
+        text = anyascii(text.replace("°", " ").replace("º", " "))  # "N°5" -> "N 5", not "Ndeg5"
     text = text.lower().replace("&", " and ")
     if states:
         text = STATE_RE.sub(lambda m: STATES[m.group(1)], text)
-    return " ".join(TOKEN_MAP.get(t, t) for t in NON_ALNUM.sub(" ", text).split())
+    out = []
+    for t in map(_tok, NON_ALNUM.sub(" ", text).split()):
+        if not out or out[-1] != t:  # "nature nature" -> "nature"
+            out.append(t)
+    return " ".join(out)
 
 
 def _chunk(cols):
@@ -130,5 +151,7 @@ if __name__ == "__main__":
     assert norm("Arihant 5ervices  Private Limited") == "arihant 5ervices pvt ltd"
     assert norm("6451 Old Church Way, Reynoldsburg, Ohio", states=True) == "6451 old church way reynoldsburg oh"
     assert norm("B+ Retail & Co.") == "b retail & co"
+    assert norm("014889 Twentieth Ave, Nature Nature") == "14889 20th ave nature"
+    assert norm("00 Second St") == "0 2nd st"
     for s in sys.argv[1:] or ["train", "test"]:
         prepare(s)
