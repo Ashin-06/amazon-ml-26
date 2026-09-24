@@ -26,7 +26,7 @@ LightGBM matcher (stage 2 sees out-of-fold stage-1 probabilities of competing ca
   26% of targets belong to no S1: realistic distractors. **No target is linked to two S1s** and **no link crosses countries**; both facts are used.
 - **Name noise:** legal-suffix swaps (Pvt/Private, LLC/Inc), typos and character swaps (C0nsulting, 5ervices), token reordering, @handles and
   domains (`@paulitawilson`, `adityaagro.com`), doubled tokens, invented DBA names at the same address, and
-  **Indian names written in Devanagari/Bengali/Kannada/Tamil…** (48% of India S2/S3 name mismatches).
+  **Indian names written in Devanagari/Bengali/Kannada/Tamil…** (28% of India S2 and 18% of India S3 train names are non-ASCII).
 - **Address noise:** abbreviations (Rd/Road, R./Rue), state names vs codes (Ohio/OH, Maharashtra/MH/महाराष्ट्र),
   component reordering, missing parts (3–4% of targets have no address), zero-padded house numbers (`014889`),
   ordinal words (`Twentieth Ave`), literal `null`.
