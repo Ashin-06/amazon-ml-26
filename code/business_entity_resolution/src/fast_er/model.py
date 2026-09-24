@@ -189,8 +189,8 @@ def hold_rule(col, hold_mod):
     return f"(hash({col} || 'hold26') % {hold_mod} = 0)"
 
 
-def _params(threads, seed):
-    return dict(objective="binary", learning_rate=0.05, num_leaves=127, min_data_in_leaf=100,
+def _params(threads, seed, leaves=127, lr=0.05):
+    return dict(objective="binary", learning_rate=lr, num_leaves=leaves, min_data_in_leaf=100,
                 feature_fraction=0.8, bagging_fraction=0.8, bagging_freq=1, lambda_l2=1.0,
                 num_threads=threads or 0, verbose=-1, seed=seed)
 
@@ -215,7 +215,7 @@ def _predict_stage1(con, models, where, threads, chunks, tmp=None, tag=""):
 
 
 def train(work, gt_path, n_train=300_000, hold_mod=22, mem="20GB", threads=None, seed=26, rounds=600,
-          chunks=8):
+          chunks=8, leaves=127, lr=0.05):
     t0 = time.time()
     lg = lambda msg: print(f"[train {time.time() - t0:.0f}s] {msg}", flush=True)  # noqa: E731
     con = _connect(work, "train", mem, threads)
@@ -238,7 +238,7 @@ def train(work, gt_path, n_train=300_000, hold_mod=22, mem="20GB", threads=None,
         y = np.fromiter(((s, t) in key for s, t in zip(df.sid, df.tid)), np.int8, len(df))
         data[g] = {"keys": df[["sid", "tid"]].copy(), "X": features(df), "y": y, "lab": lab}
         lg(f"{g}: {len(df):,} pairs, pos rate {y.mean():.3f}")
-    P = _params(threads, seed)
+    P = _params(threads, seed, leaves, lr)
     m = {g: lgb.train(P, lgb.Dataset(data[g]["X"], data[g]["y"], feature_name=FEATS), rounds) for g in ("A", "B")}
     lg("stage-1 models fitted")
     # p1: out-of-fold for A/B, averaged for everything else (holdout + all other train S1s).
@@ -275,6 +275,7 @@ def train(work, gt_path, n_train=300_000, hold_mod=22, mem="20GB", threads=None,
         hk = hk.assign(**{f"p_{name}": p})
     recall_ceiling = len(set(zip(hk.sid, hk.tid)) & set(zip(hd["lab"].sid, hd["lab"].tid))) / max(len(hd["lab"]), 1)
     metrics = {"holdout_macro_f05": res["stage2"]["macro_f05"], "threshold": res["stage2"]["threshold"],
+               "params": {"n_train": n_train, "rounds": rounds, "leaves": leaves, "lr": lr, "hold_mod": hold_mod},
                "stage1": res["stage1"], "stage2": res["stage2"], "holdout_s1": len(hold_sids),
                "candidate_link_recall": recall_ceiling,
                "importance2": dict(zip(FEATS2, m2.feature_importance("gain").round().tolist())),
