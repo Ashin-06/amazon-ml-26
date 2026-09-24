@@ -13,6 +13,7 @@ highest-probability S1 (labels show every target belongs to at most one S1).
 The threshold maximises exact macro F0.5 on held-out S1s (never used in fitting).
 """
 import json
+import os
 import re
 import shutil
 import time
@@ -131,9 +132,15 @@ def _pairs(con, where):
         ORDER BY c.sid, c.tid""").df()
 
 
+def scratch(work):
+    """Directory for spill/temporary files: $FASTER_TMP if set (e.g. /tmp on Kaggle), else the work dir."""
+    return os.environ.get("FASTER_TMP") or str(work)
+
+
 def _connect(work, split, mem, threads):
     con = duckdb.connect()
     con.execute(f"SET memory_limit='{mem}'; SET preserve_insertion_order=false")
+    con.execute(f"SET temp_directory='{Path(scratch(work)) / 'duck_tmp'}'")
     if threads:
         con.execute(f"SET threads={threads}")
     w = Path(work) / split
@@ -262,8 +269,9 @@ def train(work, gt_path, n_train=300_000, hold_mod=22, mem="20GB", threads=None,
     _context(con, allk.sid.values, allk.tid.values, allp)
     for g in ("A", "B", "hold"):
         data[g]["X2"] = np.hstack([data[g]["X"], _ctx_matrix(con, data[g]["keys"])])
+        del data[g]["X"]  # stage-1 matrix no longer needed; keeps peak memory down
     lg("stage-2 context built")
-    X2 = np.vstack([data["A"]["X2"], data["B"]["X2"]])
+    X2 = np.vstack([data["A"].pop("X2"), data["B"].pop("X2")])
     y2 = np.concatenate([data["A"]["y"], data["B"]["y"]])
     hd = data["hold"]
     m2 = lgb.train(P, lgb.Dataset(X2, y2, feature_name=FEATS2), rounds,
@@ -304,7 +312,7 @@ def predict(work, split, out_dir, mem="20GB", threads=None, chunks=8, tmp=None):
     m2 = lgb.Booster(model_file=str(md / "lgb2.txt"))
     thr = json.loads((md / "metrics.json").read_text())["threshold"]
     con = _connect(work, split, mem, threads)
-    tmp = Path(tmp or Path(work) / "tmp_fe")
+    tmp = Path(tmp or Path(scratch(work)) / "tmp_fe")
     tmp.mkdir(parents=True, exist_ok=True)
     keys, p1 = _predict_stage1(con, m1, "TRUE", threads, chunks, tmp=tmp, tag="x")
     _context(con, keys.sid.values, keys.tid.values, p1)

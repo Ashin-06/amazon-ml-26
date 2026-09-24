@@ -16,6 +16,7 @@ Kept per S1: top-`k` by total score  UNION  top-`k_field` by name  UNION
 top-`k_field` by address, so address-only (renamed DBA) and name-only
 (missing address) matches both survive. Output: work/<split>/cands.parquet.
 """
+import os
 import time
 from pathlib import Path
 
@@ -60,7 +61,7 @@ def block(split, work="work", cap=300, k=25, k_field=10, chunks=8, threads=None,
     t0 = time.time()
     con = duckdb.connect()
     con.execute(f"SET memory_limit='{mem}'; SET preserve_insertion_order=false")
-    con.execute(f"SET temp_directory='{Path(work) / 'duck_tmp'}'")
+    con.execute(f"SET temp_directory='{Path(os.environ.get('FASTER_TMP') or work) / 'duck_tmp'}'")
     if threads:
         con.execute(f"SET threads={threads}")
     con.execute(f"CREATE TABLE rec AS SELECT rid, src, country, core, addr FROM read_parquet('{Path(work) / split}/norm_s*.parquet')")

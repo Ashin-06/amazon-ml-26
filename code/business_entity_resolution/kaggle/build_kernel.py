@@ -22,6 +22,7 @@ FILES = {json.dumps(files)}
 STAGES = {a.stages!r}.split(",")
 S1_ARGS, S3_ARGS = shlex.split({a.s1!r}), shlex.split({a.s3!r})
 os.makedirs("/kaggle/working/fast_er", exist_ok=True)
+os.environ["FASTER_TMP"] = "/tmp"  # spill + feature caches off the 20 GB /kaggle/working quota
 for n, c in FILES.items():
     open(f"/kaggle/working/fast_er/{{n}}", "w").write(c)
 open("/kaggle/working/fast_er/__init__.py", "w").write("")
@@ -49,9 +50,9 @@ if "block_train" in STAGES:
 if "block_test" in STAGES:
     run("/kaggle/working/fast_er/run_stage1.py", "test", PQ, W, "--mem", "18GB", *S1_ARGS)
 if "model" in STAGES:
-    run("/kaggle/working/fast_er/run_stage3.py", W, GT, "test", "/kaggle/working/out", "--mem", "16GB", *S3_ARGS)
+    run("/kaggle/working/fast_er/run_stage3.py", W, GT, "test", "/kaggle/working/out", "--mem", "8GB", "--chunks", "24", *S3_ARGS)
 if "model_eval" in STAGES:
-    run("/kaggle/working/fast_er/run_stage3.py", W, GT, "test", "/kaggle/working/out", "--mem", "16GB", "--skip-predict", *S3_ARGS)
+    run("/kaggle/working/fast_er/run_stage3.py", W, GT, "test", "/kaggle/working/out", "--mem", "8GB", "--chunks", "24", "--skip-predict", *S3_ARGS)
 for f in glob.glob(W + "/model/metrics.json") + glob.glob(W + "/train/blocking_recall.json"):
     print(f, open(f).read()[:3000], flush=True)
 if prev:  # keep the output small: reused inputs need not be re-published
