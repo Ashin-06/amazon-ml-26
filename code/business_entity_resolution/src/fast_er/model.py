@@ -62,8 +62,9 @@ FEATS = BASE + ["n_ratio", "n_tsort", "n_tset", "n_partial", "n_jw", "c_ratio", 
                 "len_a_s", "len_a_t", "num_jac", "num_common", "num_conflict", "num_first_eq", "s_num_cnt",
                 "t_num_cnt", "hn_ratio", "hn_rel", "raw_ratio", "raw_partial", "sup_core", "sup_addr"]
 CTX = ["p1", "p1_rank", "p1_max", "p1_sum", "p1_n05", "p1_rel", "p1_trank", "p1_tother", "p1_tdiff", "p1_tn05",
-       "p1_srank", "p1_sn05", "p1_smax"]
+       "p1_srank", "p1_sn05", "p1_smax", "anc_name", "anc_core", "anc_addr", "anc_n"]
 FEATS2 = FEATS + CTX
+ANCHOR_P, ANCHOR_K, ANCHOR_MIN = 0.3, 4, 0.02  # anchors: top-4 candidates with p1 >= 0.3; scored pairs: p1 >= 0.02
 
 CTX_SQL = """
 SELECT sid, tid, p1,
@@ -174,13 +175,46 @@ def _connect(work, split, mem, threads):
     return con
 
 
-def _context(con, sid, tid, p1):
-    """Stage-2 context columns (order CTX) aligned to (sid, tid) via a DuckDB window pass."""
+def _context(con, sid, tid, p1, anchor_where="TRUE", chunks=8):
+    """Stage-2 context columns (order CTX) aligned to (sid, tid) via a DuckDB window pass,
+    plus cluster-consistency (anchor) features for pairs whose S1 matches `anchor_where`."""
     con.register("p1df", pd.DataFrame({"sid": sid, "tid": tid, "p1": p1}))
     con.execute("CREATE OR REPLACE TABLE p1tab AS SELECT * FROM p1df")
     con.unregister("p1df")
     con.execute(f"CREATE OR REPLACE TABLE ctx AS {CTX_SQL}")
+    _anchors(con, anchor_where, chunks)
     return con
+
+
+def _anchors(con, where, chunks):
+    """Cluster consistency: a reference's true matches are variants of each other, while a decoy
+    (another business at the same address) is not. For each plausible pair (p1 >= ANCHOR_MIN), compare
+    the target with the S1's other strongest candidates (top ANCHOR_K with p1 >= ANCHOR_P) and keep the
+    best name / core-name / address similarity and the number of such anchors. Table `anc`."""
+    con.execute(f"""CREATE OR REPLACE TABLE anchors AS SELECT sid, tid AS aid FROM (
+        SELECT sid, tid, p1, row_number() OVER (PARTITION BY sid ORDER BY p1 DESC, tid) AS r FROM p1tab)
+        WHERE r <= {ANCHOR_K} AND p1 >= {ANCHOR_P}""")
+    parts = []
+    for k in range(chunks):
+        df = con.execute(f"""
+            SELECT q.sid, q.tid, t.name AS tn, t.core AS tc, t.addr AS ta, x.name AS an, x.core AS ac, x.addr AS aa
+            FROM p1tab q JOIN anchors a ON a.sid = q.sid AND a.aid <> q.tid
+            JOIN rec t ON t.rid = q.tid JOIN rec x ON x.rid = a.aid
+            WHERE q.p1 >= {ANCHOR_MIN} AND q.sid % {chunks} = {k} AND ({where})""").df()
+        if not len(df):
+            continue
+        d = lambda a, b, f: cpdist(a, b, scorer=f, workers=-1, dtype=np.float32)  # noqa: E731
+        addr = d(df.ta.tolist(), df.aa.tolist(), fuzz.ratio)
+        addr[(df.ta.to_numpy() == "") | (df.aa.to_numpy() == "")] = -1
+        g = pd.DataFrame({"sid": df.sid, "tid": df.tid, "n": d(df.tn.tolist(), df.an.tolist(), fuzz.token_set_ratio),
+                          "c": d(df.tc.tolist(), df.ac.tolist(), fuzz.ratio), "a": addr})
+        parts.append(g.groupby(["sid", "tid"], sort=False).agg(anc_name=("n", "max"), anc_core=("c", "max"),
+                                                              anc_addr=("a", "max"), anc_n=("n", "size")).reset_index())
+    anc = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(
+        {"sid": [], "tid": [], "anc_name": [], "anc_core": [], "anc_addr": [], "anc_n": []})
+    con.register("ancdf", anc)
+    con.execute("CREATE OR REPLACE TABLE anc AS SELECT * FROM ancdf")
+    con.unregister("ancdf")
 
 
 def _ctx_matrix(con, keys):
@@ -190,8 +224,10 @@ def _ctx_matrix(con, keys):
         SELECT x.p1, x.p1_rank, x.p1_max, x.p1_sum, x.p1_n05, x.p1 / x.p1_max AS p1_rel, x.p1_trank,
                CASE WHEN x.p1_trank = 1 THEN coalesce(x.t2, 0) ELSE x.tmax END AS p1_tother,
                x.p1 - CASE WHEN x.p1_trank = 1 THEN coalesce(x.t2, 0) ELSE x.tmax END AS p1_tdiff, x.p1_tn05,
-               x.p1_srank, x.p1_sn05, x.p1_smax
-        FROM k JOIN ctx x USING (sid, tid) ORDER BY k.ix""").fetchnumpy()
+               x.p1_srank, x.p1_sn05, x.p1_smax,
+               coalesce(n.anc_name, -1) AS anc_name, coalesce(n.anc_core, -1) AS anc_core,
+               coalesce(n.anc_addr, -1) AS anc_addr, coalesce(n.anc_n, 0) AS anc_n
+        FROM k JOIN ctx x USING (sid, tid) LEFT JOIN anc n USING (sid, tid) ORDER BY k.ix""").fetchnumpy()
     con.unregister("k")
     return np.column_stack([m[c].astype(np.float32) for c in CTX])
 
@@ -355,7 +391,8 @@ def train(work, gt_path, n_train=300_000, hold_mod=22, mem="20GB", threads=None,
                               "AND c.tid IN (SELECT tid FROM tsample)", threads, chunks, tag="others")
     allk = pd.concat([data[g]["keys"] for g in ("A", "B", "hold")] + [ok], ignore_index=True)
     allp = np.concatenate([data[g]["p1"] for g in ("A", "B", "hold")] + [op1])
-    _context(con, allk.sid.values, allk.tid.values, allp)
+    _context(con, allk.sid.values, allk.tid.values, allp,
+             anchor_where="q.sid IN (SELECT sid FROM split WHERE g IS NOT NULL)", chunks=chunks)
     for g in ("A", "B", "hold"):
         data[g]["X2"] = np.hstack([data[g]["X"], _ctx_matrix(con, data[g]["keys"])])
         del data[g]["X"]  # stage-1 matrix no longer needed; keeps peak memory down
@@ -454,7 +491,7 @@ def predict(work, split, out_dir, mem="20GB", threads=None, chunks=8, tmp=None):
     try:
         keys, p1 = _predict_stage1(con, m1, "TRUE", threads, chunks, tmp=own, tag="x")
         check_scores(p1, name="stage-1 test scores")
-        _context(con, keys.sid.values, keys.tid.values, p1)
+        _context(con, keys.sid.values, keys.tid.values, p1, chunks=chunks)
         p2, off = [], 0
         for k in range(chunks):
             f = own / f"x{k}.npy"
