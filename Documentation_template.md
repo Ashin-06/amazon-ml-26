@@ -46,3 +46,7 @@ Selected-run code/model fingerprints, full test generation, official validator r
 The README/runbook define fresh-run commands. Inputs, source, dependencies, derived stages, model and outputs are fingerprinted. Outputs are not overwritten; partial-stage resume is unsupported. Both TSVs are validated for exact S1 coverage, IDs, countries, duplicates and containment. Archives use an explicit allowlist and exclude credentials/account settings.
 
 No external business lookup, geocoding, hosted inference API or external dataset is used. Validation includes competitors from fitted references, and full-pipeline cross-fitting is not claimed. Hidden-test performance, France accuracy and new-version full-scale resources remain unmeasured. Complete this draft only after selecting and verifying the final run.
+
+## Diagnostic and candidate reporting
+
+The selected corrected run must include every input to the first scoring model in candidate_pairs.tsv. Report its measured count, not the number of cascade survivors. Training now records complete global held decisions and additive retrieval/matcher/false-positive loss diagnostics by country. Historical v12/v15k public scores and v17 oracle ceilings are not results for a newly trained corrected model.

@@ -614,6 +614,42 @@ blocking_recall(split='train', work='work', gt_path='work/pq/train_ground_truth.
 
 Train-only: link recall and oracle macro F0.5 (empty prediction for singletons = 1.0).
 
+## fast_er/diagnostics.py
+
+Exact per-reference error accounting for frozen decisions, without threshold search.
+
+### `error_rows`
+
+```python
+error_rows(truth, prediction, references, candidate_hits, countries)
+```
+
+Decompose loss into retrieval, later missed matches and false-positive cost.
+
+candidate_hits counts naturally retrieved TRUE links, not all candidates.
+Predictions may include competitors outside references; those are not scored.
+Every requested reference must have explicit truth, hit count and country.
+No labels or decisions are changed. An empty/empty reference scores one.
+
+### `summarize_errors`
+
+```python
+summarize_errors(rows)
+```
+
+Summarize exact scores and additive loss by country, including singletons.
+
+### `reweight_known_countries`
+
+```python
+reweight_known_countries(report, test_country_counts)
+```
+
+Reweight labeled country scores; explicitly exclude unseen countries from accuracy.
+
+This is a distribution diagnostic. It is neither a prediction of the public
+score nor a measurement of an unlabeled country's accuracy.
+
 ## fast_er/efficiency.py
 
 Read-only tuning diagnostics for candidate cost, recall and oracle macro F0.5.
@@ -739,6 +775,14 @@ environment()
 ```
 
 Record the Python version and libraries that affect numerical or data behavior.
+
+### `require_first_model_candidates`
+
+```python
+require_first_model_candidates(manifest)
+```
+
+Reject exports that hide cascade inputs behind a smaller survivor count.
 
 ### `read_json`
 

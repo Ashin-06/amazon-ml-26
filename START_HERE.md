@@ -1,5 +1,8 @@
 # Amazon ML Challenge 2026: start here
 
+Latest: [v12 score investigation, new v17 measurements and rule corrections](docs/V12_SCORE_INVESTIGATION_2026-09-26.md). Latest recorded public best is v15k 0.972; 0.99 is not achieved. Active frozen v17 still needs its survivor-only candidate export corrected before final packaging.
+
+
 The task is business entity resolution. There are 24,229,173 source records, 7,638,365 labeled links and 1,732,544 required test reference rows, including 259,452 French references without French training labels.
 
 Read [the latest rules and maximum-score review](docs/RULES_AND_MAXIMUM_SCORE_REVIEW_2026-09-25.md), [status](docs/IMPLEMENTATION_STATUS.md) and [runbook](docs/RUNBOOK.md). The [implementation guide](docs/IMPLEMENTATION_GUIDE.md) is the broader design; the [function reference](docs/FUNCTION_REFERENCE.md) is generated from current source.

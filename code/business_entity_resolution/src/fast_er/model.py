@@ -31,6 +31,7 @@ from rapidfuzz.distance import JaroWinkler
 from rapidfuzz.process import cpdist
 
 from .integrity import code_digest, digest, environment, files_digest, seal, verify, verify_stage
+from .diagnostics import error_rows, summarize_errors
 from .validation import load_truth, validate_pairs, validate_records
 
 DIGITS = re.compile(r"\d+")
@@ -815,6 +816,21 @@ def _train(work, gt_path, n_train, hold_mod, mem, threads, seed, rounds, chunks,
     res = {"stage2": result}
     hold = grp == 2
     hk = pd.DataFrame({"sid": sid[hold], "tid": tid[hold], "p_stage1": p1[hold], "p_stage2": p2[hold]})
+    # Preserve the actual GLOBAL decision. Saved hold-only probabilities cannot reconstruct
+    # losses to competitors outside hold, which made historical postmortems ambiguous.
+    hold_set = set(hold_sids)
+    selected = {s: targets for s,targets in decide(sid[keep], tid[keep], p2[keep], result['threshold']).items()
+                if s in hold_set}
+    complete_truth = {s: truth.get(s, set()) for s in hold_sids}
+    hits = dict.fromkeys(hold_sids, 0)
+    hits.update({int(s): int(n) for s,n in hk.loc[y[hold].astype(bool),'sid'].value_counts().items()})
+    countries = dict(con.execute("SELECT r.rid,r.country FROM rec r JOIN split s ON s.sid=r.rid WHERE s.g='hold'").fetchall())
+    errors = error_rows(complete_truth, selected, hold_sids, hits, countries)
+    diagnostics = {half: summarize_errors([r for r in errors if (r['sid'] in tune_set) == is_tune])
+                   for half,is_tune in (('tune',True),('final',False))}
+    for half in ('tune','final'):
+        if abs(diagnostics[half]['all']['macro_f05']-result[half+'_macro_f05']) > 1e-10:
+            raise RuntimeError('Diagnostic and production decision metrics disagree')
     lg(f"HOLDOUT stage2: threshold={result['threshold']} final macro F0.5={result['final_macro_f05']:.5f}")
     recall_ceiling = cand["blocked_link_recall"]
     devices = {name: "cpu" if isinstance(b, lgb.Booster) else b.attr("training_device") or model_device(b)
@@ -827,6 +843,7 @@ def _train(work, gt_path, n_train, hold_mod, mem, threads, seed, rounds, chunks,
                "references_fit": {"A": int(counts["A"]), "B": int(counts["B"]),
                                   "stage2": int(np.unique(sid[fit2]).size)},
                "candidate_filter": cand,
+               "error_diagnostics": diagnostics,
                "labels": label_stats, "stage2": res["stage2"],
                "evaluation": "One final evaluation; production scores/global ownership; competitor pool includes fitted references.",
                "cross_fit_scope": "classifier only; lexicon fitted on all non-hold references",
@@ -840,6 +857,11 @@ def _train(work, gt_path, n_train, hold_mod, mem, threads, seed, rounds, chunks,
     extension = ".txt" if backend == "lgb" else ".json"
     hk.assign(y=y[hold].astype(bool), p=hk["p_stage2"]).to_parquet(out / "hold_preds.parquet", index=False)
     pd.DataFrame({"sid": hold_sids}).to_parquet(out / "hold_sids.parquet", index=False)
+    pd.DataFrame(errors).assign(half=['tune' if r['sid'] in tune_set else 'final' for r in errors]).to_parquet(
+        out / 'hold_error_rows.parquet', index=False)
+    pd.DataFrame({'sid': hold_sids,
+                  'matched_tids': [sorted(selected.get(s, ())) for s in hold_sids]}).to_parquet(
+        out / 'hold_decisions.parquet', index=False)
     # Persist split membership by entity id (DuckDB's hash() may change across versions).
     ids = con.execute("SELECT r.entity_id, r.rid, s.g FROM split s JOIN rec r ON r.rid = s.sid WHERE s.g IS NOT NULL").df()
     ids["half"] = np.where(ids.rid.isin(tune_set), "tune", np.where(ids.g == "hold", "final", ""))
@@ -849,7 +871,8 @@ def _train(work, gt_path, n_train, hold_mod, mem, threads, seed, rounds, chunks,
         "train_stage": stage, "labels": files_digest([gt_path]), "params": metrics["params"],
         "lexicon": digest(Path(work) / "lexicon.json")},
         [n + extension for n in ("model_A", "model_B", "model_2")] +
-        ["metrics.json", "hold_preds.parquet", "hold_sids.parquet", "split_ids.parquet"])
+        ["metrics.json", "hold_preds.parquet", "hold_sids.parquet", "split_ids.parquet",
+         "hold_error_rows.parquet", "hold_decisions.parquet"])
     con.close()
     return metrics
 

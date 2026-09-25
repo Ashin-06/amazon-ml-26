@@ -1,5 +1,8 @@
 # Implementation status — 25 September 2026
 
+Update 26 September: [the score investigation](V12_SCORE_INVESTIGATION_2026-09-26.md) reconciles v12 outputs, distinguishes saved model metrics from hold-only comparisons, and measures v17 retrieval on all 50,141 tuning references (oracle 0.993748; 95.17 candidates/reference). Training in this checkout now saves exact global held decisions and per-country/additive error diagnostics. Packaging and ensemble application explicitly reject survivor-only candidate accounting. These corrections were not installed into the active frozen v17 job.
+
+
 This status applies to branch codex/compact-pipeline-20260925. It includes source through 90ead4f plus the corrections in the [latest rules and score review](RULES_AND_MAXIMUM_SCORE_REVIEW_2026-09-25.md). Active jobs were preserved.
 
 Implemented: explicit UTF-8 conversion, natural DuckDB blocking, supervised transliteration with hold exclusion, 53 pair and 17 context features, LightGBM/XGBoost, cached feature reuse, exact per-reference F0.5, production-consistent evaluation/global ownership, tune-only threshold selection, exact first-model candidate export and chained manifests.
@@ -15,3 +18,5 @@ Not established: a full retrained model for this version, a 0.99+ score, France 
 Follow the [runbook](RUNBOOK.md). Source changes require retraining or matching saved code. No partial-stage resume or multi-account scheduler is implemented. Methodology remains a draft; this review made no leaderboard upload.
 
 Release verification: **108 tests passed**, zero failures/errors; **38 Python files compiled**; quality passed with all **12 original manifest fingerprints** matching. Tests completed in 22.85 seconds. This establishes software behavior, not a full retrained model score.
+
+Verification update, 26 September: **111 tests passed**, **40 Python files compiled**, quality passed and **12 original input hashes matched**. Earlier 108-test evidence below/above remains historical for 9cb1200. Current evidence is `artifacts/v12-score-review/verification.json`.

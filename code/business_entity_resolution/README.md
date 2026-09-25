@@ -1,5 +1,8 @@
 # Business entity resolution — audit implementation
 
+Latest review: [v12 public-score diagnosis and v17 measurements](../../docs/V12_SCORE_INVESTIGATION_2026-09-26.md). Training saves `hold_decisions.parquet` and `hold_error_rows.parquet`, with original tune/final membership and exact global ownership. `metrics.json.error_diagnostics` separates retrieval, later missed matches and false-positive cost by country at the selected threshold. The packager and ensemble application reject candidate manifests that hide first-model inputs.
+
+
 This checkout contains the corrected fast pipeline and the older SQLite baseline. See [the review](../../docs/FINAL_HARDENING_REVIEW_2026-09-25.md), [runbook](../../docs/RUNBOOK.md) and [function reference](../../docs/FUNCTION_REFERENCE.md).
 
 The fast model uses 53 pair features and 17 context/cluster features. Two first-stage classifiers are cross-fitted; the second stage uses their probabilities and competition context. The learned lexicon excludes held references. Thresholds use tuning macro F0.5, then final holdout is evaluated once with production scoring over the complete candidate graph.

@@ -40,6 +40,16 @@ def environment():
             "packages": {p: importlib.metadata.version(p) for p in PACKAGES}}
 
 
+def require_first_model_candidates(manifest):
+    """Reject exports that hide cascade inputs behind a smaller survivor count."""
+    inputs = manifest.get('inputs', {})
+    pairs, blocked = inputs.get('pairs'), inputs.get('blocked_pairs')
+    if (inputs.get('candidate_scope') != 'input_to_first_scoring_model'
+            or type(pairs) is not int or type(blocked) is not int
+            or pairs < 0 or pairs != blocked):
+        raise ValueError('Candidate export must contain every first scoring model input')
+
+
 def read_json(path):
     """Read UTF-8 JSON without permitting a missing completion manifest."""
     path = Path(path)

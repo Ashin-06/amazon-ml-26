@@ -6,7 +6,7 @@ import sys
 import zipfile
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from fast_er.integrity import code_digest, digest, read_json, verify, verify_stage
+from fast_er.integrity import code_digest, digest, read_json, verify, verify_stage, require_first_model_candidates
 from fast_er.model import load_models, model_path
 
 DENY = re.compile(r"(?i)(kaggle\.json|access_token|\.env$|secret|credential|token|\.pem$|\.key$|id_rsa)")
@@ -31,6 +31,7 @@ def build_package(output_dir, run_dir, doc, expected_manifest, destination, mode
         raise FileExistsError("Archive exists; choose a new versioned destination")
     check_document(doc)
     predicted = verify(out, "prediction_manifest.json")
+    require_first_model_candidates(predicted)
     stage = verify_stage(run, "test")
     if predicted["inputs"]["stage"] != stage or predicted["inputs"]["code"] != code_digest():
         raise ValueError("Output/test stage/code mismatch")
