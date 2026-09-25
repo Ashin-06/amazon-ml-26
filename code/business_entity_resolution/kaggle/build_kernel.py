@@ -34,7 +34,7 @@ for mod, pkg in (("duckdb", "duckdb"), ("rapidfuzz", "rapidfuzz"), ("lightgbm", 
     try: __import__(mod)
     except ImportError: subprocess.run([sys.executable, "-m", "pip", "install", "-q", pkg], check=False)
 import importlib
-for mod in ("duckdb", "rapidfuzz", "lightgbm", "anyascii", "pyarrow", "pandas", "numpy"):
+for mod in ("duckdb", "rapidfuzz", "lightgbm", "xgboost", "anyascii", "pyarrow", "pandas", "numpy"):
     try: importlib.import_module(mod)
     except ImportError as e: raise SystemExit(f"PREFLIGHT FAILED: {{mod}} not importable ({{e}}); enable internet or attach its wheel")
 PQ = os.path.dirname(glob.glob("/kaggle/input/**/train_source1.parquet", recursive=True)[0])
@@ -45,7 +45,7 @@ if prev and not os.path.exists(W):  # reuse an earlier kernel's stage-1 output (
     subprocess.run(["rm", "-rf", W + "/model"], check=True)
 print("PQ", PQ, "stages", STAGES, "cpus", os.cpu_count(), "reuse", bool(prev), flush=True)
 import importlib.metadata as _md
-print("versions", {{p: _md.version(p) for p in ("duckdb", "lightgbm", "rapidfuzz", "numpy", "pandas", "pyarrow", "anyascii")}}, flush=True)
+print("versions", {{p: _md.version(p) for p in ("duckdb", "lightgbm", "xgboost", "rapidfuzz", "numpy", "pandas", "pyarrow", "anyascii")}}, flush=True)
 t0 = time.time()
 def run(*args):
     print(">>>", *args, flush=True)
