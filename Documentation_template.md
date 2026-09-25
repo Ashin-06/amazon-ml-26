@@ -48,7 +48,7 @@ half, scored on the other (same protocol for all rows in the last column).
 
 Also tested: expected-F0.5 subset selection and separate thresholds per country or for the top candidate (no gain);
 per-reference sample weights (small gain on a pilot). **Errors:** misses dominate (≈9 missed links per false link);
-64% of missed links were never retrieved, mostly generic names with an empty target address. False links are mainly
+64% of missed links were never retrieved; nearly half of those have an empty target address (often a generic name). False links are mainly
 a different business at the same or neighboring address. France has no labels: its predicted match rate (5.8% empty,
 3.4 links/reference) matches US/India.
 
