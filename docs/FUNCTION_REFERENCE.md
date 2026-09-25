@@ -929,6 +929,23 @@ resolve_backend(backend)
 
 'auto' -> 'xgb' when a CUDA GPU is usable (Kaggle T4, local RTX), else 'lgb' on CPU.
 
+### `_xgb_params`
+
+```python
+_xgb_params(P, device)
+```
+
+XGBoost settings equivalent to the LightGBM parameters in P.
+
+### `_xgb_train`
+
+```python
+_xgb_train(P, make, n, rounds)
+```
+
+Train on the GPU when usable; if the GPU runs out of memory, rebuild the matrix and train on CPU.
+`make` builds the quantized matrix (~1 byte per value); no evaluation set (it only cost GPU memory).
+
 ### `_fit`
 
 ```python
@@ -936,6 +953,16 @@ _fit(backend, P, X, y, w, names, rounds, valid=None)
 ```
 
 Train one booster: XGBoost (GPU if available, CPU otherwise) or LightGBM (CPU).
+
+### `_fit_parts`
+
+```python
+_fit_parts(backend, P, loaders, y, w, names, rounds)
+```
+
+_fit for training rows kept on disk: `loaders` return consecutive row blocks matching y / w.
+XGBoost streams the blocks into its quantized matrix (~1 byte per value), so every reference fits in
+memory; LightGBM (small runs and tests) concatenates them.
 
 ### `_pred`
 
@@ -1019,15 +1046,6 @@ _score_all(con, models, m2, threads, chunks, tmp_parent)
 
 Score the complete graph using the production pipeline and run-owned disk caches.
 
-### `_score_cached`
-
-```python
-_score_cached(con, models, m2, parts, chunks, threads)
-```
-
-Production scores exactly as _score_all, for candidates already featurized once.
-parts = [(keys, path of their stage-1 matrix)]; together they must cover the candidate table.
-
 ### `evaluate_threshold`
 
 ```python
@@ -1055,7 +1073,8 @@ Fit classifiers and stacker, then evaluate disjoint tune/final reference groups.
 Stacker inputs use classifier-level cross-fitting. The learned lexicon uses
 non-hold references, so this is not full-pipeline cross-fitting. Every training
 candidate is featurized once; the stage-1 matrices are cached in a run-owned scratch
-directory (removed afterwards) and reused for the production-scoring evaluation pass.
+directory (removed afterwards), streamed into the boosters and reused for the production-scoring
+evaluation pass. n_train above the number of non-holdout references trains on all of them.
 
 ### `_train`
 
@@ -1064,6 +1083,10 @@ _train(work, gt_path, n_train, hold_mod, mem, threads, seed, rounds, chunks, lea
 ```
 
 Body of train(); `own` is the scratch directory for cached stage-1 matrices.
+
+Every training candidate (all references: fit groups A/B, holdout, others) is featurized exactly once,
+one sid-slice at a time; matrices live on disk and boosters read them block by block. n_train above
+the number of non-holdout references means all of them.
 
 ### `load_models`
 

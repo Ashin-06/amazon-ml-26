@@ -237,6 +237,19 @@ def test_reference_weights_and_cpu_xgboost_roundtrip(tmp_path, monkeypatch):
     assert model._names(restored) == ["a","b","c","d"]
 
 
+def test_streamed_xgboost_matches_in_memory(monkeypatch):
+    monkeypatch.setattr(model, "_GPU", False)
+    rng = np.random.default_rng(3)
+    X = rng.random((3000, 4), dtype=np.float32)
+    y = (X[:, 0] + .2 * X[:, 1] > .6).astype(np.int8)
+    w = model.pair_weights(rng.integers(0, 500, 3000), "ref")
+    P = model._params(1, 26, 7, .1)
+    whole = model._fit("xgb", P, X, y, w, list("abcd"), 5)
+    blocks = [(lambda a=a: X[a:a + 700]) for a in range(0, 3000, 700)]
+    streamed = model._fit_parts("xgb", P, blocks, y, w, list("abcd"), 5)
+    np.testing.assert_allclose(model._pred(whole, X, 1), model._pred(streamed, X, 1), atol=1e-6)
+
+
 def test_verified_archive_rejects_drafts_and_wrong_originals(completed_pipeline, tmp_path):
     import importlib.util
     path = Path(__file__).resolve().parents[1] / "kaggle/package_submission.py"

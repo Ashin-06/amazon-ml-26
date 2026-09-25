@@ -351,6 +351,30 @@ def resolve_backend(backend):
     return backend
 
 
+def _xgb_params(P, device):
+    """XGBoost settings equivalent to the LightGBM parameters in P."""
+    return {"objective": "binary:logistic", "eval_metric": "logloss", "tree_method": "hist", "device": device,
+            "learning_rate": P["learning_rate"], "max_leaves": P["num_leaves"], "grow_policy": "lossguide",
+            "max_depth": 0, "min_child_weight": 5, "subsample": 0.8, "colsample_bytree": 0.8, "reg_lambda": 1.0,
+            "max_bin": 256, "seed": P["seed"], "nthread": P["num_threads"] or 1, "verbosity": 1}
+
+
+def _xgb_train(P, make, n, rounds):
+    """Train on the GPU when usable; if the GPU runs out of memory, rebuild the matrix and train on CPU.
+    `make` builds the quantized matrix (~1 byte per value); no evaluation set (it only cost GPU memory)."""
+    import xgboost as xgb
+    device = "cuda" if gpu_available() else "cpu"
+    d = make()
+    try:
+        return xgb.train(_xgb_params(P, device), d, rounds)
+    except xgb.core.XGBoostError as e:
+        if device != "cuda" or "memory" not in str(e).lower():
+            raise
+        print(f"  [xgboost] GPU out of memory ({n:,} rows); retrying this booster on CPU", flush=True)
+        del d
+        return xgb.train(_xgb_params(P, "cpu"), make(), rounds)
+
+
 def _fit(backend, P, X, y, w, names, rounds, valid=None):
     """Train one booster: XGBoost (GPU if available, CPU otherwise) or LightGBM (CPU)."""
     if backend == "lgb":
@@ -358,22 +382,38 @@ def _fit(backend, P, X, y, w, names, rounds, valid=None):
         return lgb.train(P, lgb.Dataset(X, y, feature_name=list(names), weight=w), rounds, valid_sets=vs,
                          callbacks=[lgb.log_evaluation(100)] if vs else [])
     import xgboost as xgb
-    xp = {"objective": "binary:logistic", "eval_metric": "logloss", "tree_method": "hist",
-          "device": "cuda" if gpu_available() else "cpu", "learning_rate": P["learning_rate"],
-          "max_leaves": P["num_leaves"], "grow_policy": "lossguide", "max_depth": 0, "min_child_weight": 5,
-          "subsample": 0.8, "colsample_bytree": 0.8, "reg_lambda": 1.0, "max_bin": 256, "seed": P["seed"],
-          "nthread": P["num_threads"] or 1, "verbosity": 1}
-    # No evaluation set: it only produced log lines and costs GPU memory.
-    d = xgb.QuantileDMatrix(X, y, weight=w, feature_names=list(names))  # quantized: ~1 byte per value
-    try:
-        return xgb.train(xp, d, rounds)
-    except xgb.core.XGBoostError as e:
-        if xp["device"] != "cuda" or "memory" not in str(e).lower():
-            raise
-        print(f"  [xgboost] GPU out of memory ({len(y):,} rows); retrying this booster on CPU", flush=True)
-        xp["device"] = "cpu"
-        del d
-        return xgb.train(xp, xgb.QuantileDMatrix(X, y, weight=w, feature_names=list(names)), rounds)
+    return _xgb_train(P, lambda: xgb.QuantileDMatrix(X, y, weight=w, feature_names=list(names)), len(y), rounds)
+
+
+def _fit_parts(backend, P, loaders, y, w, names, rounds):
+    """_fit for training rows kept on disk: `loaders` return consecutive row blocks matching y / w.
+    XGBoost streams the blocks into its quantized matrix (~1 byte per value), so every reference fits in
+    memory; LightGBM (small runs and tests) concatenates them."""
+    if backend == "lgb":
+        return _fit(backend, P, np.vstack([f() for f in loaders]), y, w, names, rounds)
+    import xgboost as xgb
+
+    class Blocks(xgb.DataIter):
+        def __init__(self):
+            self.i = self.off = 0
+            super().__init__()
+
+        def next(self, input_data):
+            if self.i == len(loaders):
+                return False
+            X = loaders[self.i]()
+            n = len(X)
+            input_data(data=X, label=y[self.off:self.off + n], feature_names=list(names),
+                       weight=None if w is None else w[self.off:self.off + n])
+            self.i, self.off = self.i + 1, self.off + n
+            return True
+
+        def reset(self):
+            if self.i == len(loaders) and self.off != len(y):
+                raise ValueError("Streamed rows do not match the labels")
+            self.i = self.off = 0
+
+    return _xgb_train(P, lambda: xgb.QuantileDMatrix(Blocks(), max_bin=256), len(y), rounds)
 
 
 def _pred(m, X, threads=None):
@@ -482,27 +522,6 @@ def _score_all(con, models, m2, threads, chunks, tmp_parent):
         shutil.rmtree(own)
 
 
-def _score_cached(con, models, m2, parts, chunks, threads):
-    """Production scores exactly as _score_all, for candidates already featurized once.
-    parts = [(keys, path of their stage-1 matrix)]; together they must cover the candidate table."""
-    keys = pd.concat([k for k, _ in parts], ignore_index=True)
-    if len(keys) != con.execute("SELECT count(*) FROM c").fetchone()[0]:
-        raise ValueError("Cached stage-1 matrices must cover every candidate exactly once")
-    p1 = []
-    for k, path in parts:
-        X = np.load(path, allow_pickle=False)
-        if len(X) != len(k):
-            raise ValueError("Cached stage-1 matrix does not match its keys")
-        p1.append(np.mean([_pred(m, X, threads) for m in models], axis=0))
-    p1 = np.concatenate(p1) if p1 else np.empty(0)
-    check_scores(p1)
-    _context(con, keys.sid.values, keys.tid.values, p1, chunks=chunks, threads=threads)
-    p2 = [_pred(m2, np.hstack([np.load(path, allow_pickle=False), _ctx_matrix(con, k)]), threads) for k, path in parts]
-    p2 = np.concatenate(p2) if p2 else np.empty(0)
-    check_scores(p2)
-    return keys, p1, p2
-
-
 def evaluate_threshold(sid, tid, p, truth, tune_sids, final_sids, grid=None):
     """Choose with tune labels, then evaluate final labels exactly once."""
     if not tune_sids or not final_sids or set(tune_sids) & set(final_sids):
@@ -538,7 +557,8 @@ def train(work, gt_path, n_train=300_000, hold_mod=22, mem="20GB", threads=None,
     Stacker inputs use classifier-level cross-fitting. The learned lexicon uses
     non-hold references, so this is not full-pipeline cross-fitting. Every training
     candidate is featurized once; the stage-1 matrices are cached in a run-owned scratch
-    directory (removed afterwards) and reused for the production-scoring evaluation pass.
+    directory (removed afterwards), streamed into the boosters and reused for the production-scoring
+    evaluation pass. n_train above the number of non-holdout references trains on all of them.
     """
     Path(scratch(work)).mkdir(parents=True, exist_ok=True)
     own = Path(tempfile.mkdtemp(prefix="fe_train_", dir=scratch(work)))
@@ -551,7 +571,11 @@ def train(work, gt_path, n_train=300_000, hold_mod=22, mem="20GB", threads=None,
 
 def _train(work, gt_path, n_train, hold_mod, mem, threads, seed, rounds, chunks, leaves, lr, weight, backend,
            model_dir, own):
-    """Body of train(); `own` is the scratch directory for cached stage-1 matrices."""
+    """Body of train(); `own` is the scratch directory for cached stage-1 matrices.
+
+    Every training candidate (all references: fit groups A/B, holdout, others) is featurized exactly once,
+    one sid-slice at a time; matrices live on disk and boosters read them block by block. n_train above
+    the number of non-holdout references means all of them."""
     _check_args(n_train, hold_mod, chunks, rounds)
     P = _params(threads, seed, leaves, lr)
     if weight not in ("none", "ref", "sqrt"):
@@ -572,93 +596,118 @@ def _train(work, gt_path, n_train, hold_mod, mem, threads, seed, rounds, chunks,
     # Disjoint S1 groups by a seeded hash of the entity id (never used as a feature).
     # Holdout = fixed hash rule shared with the lexicon step (which excludes these S1s).
     ab_salt = "ab" if seed == 26 else f"ab{seed}"
-    half = n_train // 2
+    n_ref = con.execute(f"SELECT count(*) FROM rec WHERE src = 1 AND NOT {hold_rule('entity_id', hold_mod)}").fetchone()[0]
+    n_fit = min(n_train, n_ref)
+    half = n_fit // 2
     con.execute(f"""CREATE TABLE split AS SELECT rid AS sid,
-          CASE WHEN ho THEN 'hold' WHEN h < {half} THEN 'A' WHEN h < {n_train} THEN 'B' END AS g
+          CASE WHEN ho THEN 'hold' WHEN h < {half} THEN 'A' WHEN h < {n_fit} THEN 'B' END AS g
         FROM (SELECT rid, ho, row_number() OVER (PARTITION BY ho ORDER BY md5(entity_id || {lit(ab_salt)}), entity_id) - 1 AS h
               FROM (SELECT rid, entity_id, {hold_rule('entity_id', hold_mod)} AS ho FROM rec WHERE src = 1))""")
     counts = dict(con.execute("SELECT g, count(*) FROM split GROUP BY g").fetchall())
     if any(not counts.get(g) for g in ("A", "B", "hold")):
         raise ValueError("Insufficient references for train/hold groups")
-    data = {}
-    for g in ("A", "B", "hold"):
-        lab = con.execute(f"SELECT sid, tid FROM gt WHERE sid IN (SELECT sid FROM split WHERE g = '{g}')").df()
-        key = set(zip(lab.sid, lab.tid))
-        keys, Xs = [], []
-        for k in range(chunks):  # chunked so only one slice of text rows is in memory at a time
-            df = _pairs(con, f"c.sid IN (SELECT sid FROM split WHERE g = '{g}') AND c.sid % {chunks} = {k}")
-            if not len(df):
-                continue
-            keys.append(df[["sid", "tid"]].copy())
-            Xs.append(features(df, threads))
-            del df
-        if not keys:
-            raise ValueError(f"No natural candidates in {g}; enlarge the pilot")
-        kk = pd.concat(keys, ignore_index=True)
-        y = np.fromiter(((s, t) in key for s, t in zip(kk.sid, kk.tid)), np.int8, len(kk))
-        if g in ("A", "B") and len(np.unique(y)) != 2:
-            raise ValueError(f"{g} needs naturally retrieved positives and negatives")
-        data[g] = {"keys": kk, "X": np.vstack(Xs), "y": y, "lab": lab}
-        del Xs
-        np.save(own / f"{g}.npy", data[g]["X"])  # reused by the production-scoring pass
-        lg(f"{g}: {len(kk):,} pairs, pos rate {y.mean():.3f}")
-    P = _params(threads, seed, leaves, lr)
-    m = {g: _fit(backend, P, data[g]["X"], data[g]["y"],
-        pair_weights(data[g]["keys"].sid.values, weight), FEATS, rounds) for g in ("A", "B")}
+    code = con.execute("SELECT sid, CASE g WHEN 'A' THEN 0 WHEN 'B' THEN 1 WHEN 'hold' THEN 2 ELSE 3 END AS c FROM split").df()
+    group_of = pd.Series(code.c.to_numpy(np.int8), index=code.sid.to_numpy())
+    del code
+    # One featurization pass over every candidate (group 0 = A, 1 = B, 2 = holdout, 3 = other references).
+    sids, tids, grps, ys, files = [], [], [], [], []
+    for k in range(chunks):  # one sid-slice of text rows in memory at a time
+        df = _pairs(con, f"c.sid % {chunks} = {k}")
+        if not len(df):
+            continue
+        path = own / f"x{k}.npy"
+        np.save(path, features(df, threads))
+        kk = df[["sid", "tid"]].reset_index(drop=True)
+        del df
+        lab = con.execute(f"SELECT sid, tid, 1::TINYINT AS y FROM gt WHERE sid % {chunks} = {k}").df()
+        sids.append(kk.sid.to_numpy(np.int32)); tids.append(kk.tid.to_numpy(np.int32))
+        grps.append(kk.sid.map(group_of).to_numpy(np.int8))
+        ys.append(kk.merge(lab, on=["sid", "tid"], how="left").y.fillna(0).to_numpy(np.int8))
+        files.append(path)
+        lg(f"features {k + 1}/{chunks}: {len(kk):,} pairs")
+    sid, tid, grp, y = (np.concatenate(v) for v in (sids, tids, grps, ys))
+    del sids, tids, grps, ys
+    bounds = np.cumsum([0] + [np.load(f, mmap_mode="r").shape[0] for f in files])
+    if bounds[-1] != len(sid) or len(sid) != con.execute("SELECT count(*) FROM c").fetchone()[0]:
+        raise ValueError("Featurized rows must cover every candidate exactly once")
+    for i, name in enumerate(("A", "B", "hold")):
+        sel = grp == i
+        if not sel.any() or (i < 2 and len(np.unique(y[sel])) != 2):
+            raise ValueError(f"{name} needs naturally retrieved positives and negatives")
+        lg(f"{name}: {int(sel.sum()):,} pairs, pos rate {y[sel].mean():.3f}")
+
+    def loaders(sel, ctx=None):
+        """Row-block readers for the selected rows, in array order (optionally with cached context)."""
+        out = []
+        for i, f in enumerate(files):
+            s = sel[bounds[i]:bounds[i + 1]]
+            if s.any():
+                out.append((lambda f=f, s=s: np.load(f)[s]) if ctx is None else
+                           (lambda f=f, s=s, c=ctx[i]: np.hstack([np.load(f)[s], np.load(c)])))
+        return out
+
+    m = {}
+    for i, name in enumerate(("A", "B")):
+        sel = grp == i
+        m[name] = _fit_parts(backend, P, loaders(sel), y[sel], pair_weights(sid[sel], weight), FEATS, rounds)
     lg("stage-1 models fitted")
-    # p1: out-of-fold for A/B, averaged for everything else (holdout + all other train S1s).
-    data["A"]["p1"] = _pred(m["B"], data["A"]["X"], threads)
-    data["B"]["p1"] = _pred(m["A"], data["B"]["X"], threads)
-    data["hold"]["p1"] = np.mean([_pred(m[g], data["hold"]["X"], threads) for g in "AB"], axis=0)
-    # Use complete lists so per-reference support and context equal the production definitions.
-    ok, op1 = _predict_stage1(con, [m["A"], m["B"]],
-                              "c.sid IN (SELECT sid FROM split WHERE g IS NULL)",
-                              threads, chunks, tmp=own, tag="o")
-    allk = pd.concat([data[g]["keys"] for g in ("A", "B", "hold")] + [ok], ignore_index=True)
-    allp = np.concatenate([data[g]["p1"] for g in ("A", "B", "hold")] + [op1])
-    _context(con, allk.sid.values, allk.tid.values, allp, chunks=chunks, threads=threads)
-    for g in ("A", "B", "hold"):
-        data[g]["X2"] = np.hstack([data[g]["X"], _ctx_matrix(con, data[g]["keys"])])
-        del data[g]["X"]  # stage-1 matrix no longer needed; keeps peak memory down
+    # p1: out-of-fold for A/B (training context); production p1 = mean of both models for every row.
+    p1 = np.empty(len(sid)); p1p = np.empty(len(sid))
+    for i, f in enumerate(files):
+        a, b = bounds[i], bounds[i + 1]
+        X = np.load(f)
+        pa, pb = _pred(m["A"], X, threads), _pred(m["B"], X, threads)
+        p1p[a:b] = np.mean([pa, pb], axis=0)
+        p1[a:b] = np.where(grp[a:b] == 0, pb, np.where(grp[a:b] == 1, pa, p1p[a:b]))
+    del X, pa, pb
+    np.save(own / "p1p.npy", p1p)
+    del p1p
+    # Complete lists, so per-reference support and target competition equal the production definitions.
+    _context(con, sid, tid, p1, chunks=chunks, threads=threads)
+    del p1
+    fit2 = grp <= 1
+    ctx = {}
+    for i in range(len(files)):
+        s = fit2[bounds[i]:bounds[i + 1]]
+        if s.any():
+            ctx[i] = own / f"ctx{i}.npy"
+            np.save(ctx[i], _ctx_matrix(con, pd.DataFrame({"sid": sid[bounds[i]:bounds[i + 1]][s],
+                                                            "tid": tid[bounds[i]:bounds[i + 1]][s]})))
+    con.execute("DROP TABLE IF EXISTS anc; DROP TABLE IF EXISTS anchors; DROP TABLE IF EXISTS ctx; DROP TABLE IF EXISTS p1tab")
     lg("stage-2 context built")
-    X2 = np.vstack([data["A"].pop("X2"), data["B"].pop("X2")])
-    y2 = np.concatenate([data["A"]["y"], data["B"]["y"]])
-    hd = data["hold"]
     # Hold labels never reach the learner, early stopping or a training log.
-    w2 = pair_weights(np.concatenate([data["A"]["keys"].sid.values, data["B"]["keys"].sid.values]), weight)
-    m2 = _fit(backend, P, X2, y2, w2, FEATS2, rounds)
-    del X2, y2, allk, allp, op1
+    m2 = _fit_parts(backend, P, loaders(fit2, ctx), y[fit2], pair_weights(sid[fit2], weight), FEATS2, rounds)
+    for c in ctx.values():
+        c.unlink()
+    lg("stage-2 model fitted")
+    # One complete production pass: stage-2 scores compete only with stage-2 scores.
+    p1 = np.load(own / "p1p.npy")
+    _context(con, sid, tid, p1, chunks=chunks, threads=threads)
+    p2 = np.empty(len(sid))
+    for i, f in enumerate(files):
+        a, b = bounds[i], bounds[i + 1]
+        p2[a:b] = _pred(m2, np.hstack([np.load(f), _ctx_matrix(con, pd.DataFrame({"sid": sid[a:b], "tid": tid[a:b]}))]), threads)
+    check_scores(p1)
+    check_scores(p2)
     hold_sids = con.execute("SELECT sid FROM split WHERE g = 'hold'").df().sid.tolist()
     tune_set = set(con.execute(f"""SELECT r.rid FROM rec r JOIN split s ON s.sid = r.rid
         WHERE s.g='hold' AND md5_number_lower(r.entity_id || 'tune26') % 2 = 0""").df().rid)
     tune_sids = [s for s in hold_sids if s in tune_set]
     final_sids = [s for s in hold_sids if s not in tune_set]
-    truth = hd["lab"].groupby("sid")["tid"].apply(set).to_dict()
-    # One complete production pass: stage-2 scores compete only with stage-2 scores.
-    # Measure this additional pass on a bounded pilot before scaling.
-    for entry in data.values():
-        entry.pop("X2", None)
-    parts, off = [(data[g]["keys"], own / f"{g}.npy") for g in ("A", "B", "hold")], 0
-    for k in range(chunks):  # others were cached chunk by chunk in the order of their keys
-        path = own / f"o{k}.npy"
-        if path.exists():
-            n = np.load(path, mmap_mode="r").shape[0]
-            parts.append((ok.iloc[off:off + n], path))
-            off += n
-    if off != len(ok):
-        raise ValueError("Cached stage-1 coverage mismatch")
-    kk, p1, p2 = _score_cached(con, [m["A"], m["B"]], m2, parts, chunks, threads)
-    del ok, parts
-    result = evaluate_threshold(kk.sid.values, kk.tid.values, p2, truth, tune_sids, final_sids)
+    lab_hold = con.execute("SELECT sid, tid FROM gt WHERE sid IN (SELECT sid FROM split WHERE g = 'hold')").df()
+    truth = lab_hold.groupby("sid")["tid"].apply(set).to_dict()
+    keep = p2 >= 0.1  # searched thresholds are all >= 0.18 and decide() drops lower scores first: exact
+    result = evaluate_threshold(sid[keep], tid[keep], p2[keep], truth, tune_sids, final_sids)
     res = {"stage2": result}
-    hk = kk.assign(p_stage1=p1, p_stage2=p2)
-    hk = hk[hk.sid.isin(hold_sids)].copy()
+    hold = grp == 2
+    hk = pd.DataFrame({"sid": sid[hold], "tid": tid[hold], "p_stage1": p1[hold], "p_stage2": p2[hold]})
     lg(f"HOLDOUT stage2: threshold={result['threshold']} final macro F0.5={result['final_macro_f05']:.5f}")
-    recall_ceiling = len(set(zip(hk.sid, hk.tid)) & set(zip(hd["lab"].sid, hd["lab"].tid))) / max(len(hd["lab"]), 1)
+    recall_ceiling = int(y[hold].sum()) / max(len(lab_hold), 1)
     metrics = {"holdout_macro_f05": res["stage2"]["final_macro_f05"], "threshold": res["stage2"]["threshold"],
                "params": {"n_train": n_train, "rounds": rounds, "leaves": leaves, "lr": lr, "hold_mod": hold_mod,
                           "chunks": chunks, "seed": seed, "weight": weight, "backend": backend,
                           "gpu": bool(backend == "xgb" and gpu_available())},
+               "references_fit": {"A": int(counts["A"]), "B": int(counts["B"])},
                "labels": label_stats, "stage2": res["stage2"],
                "evaluation": "One final evaluation; production scores/global ownership; competitor pool includes fitted references.",
                "cross_fit_scope": "classifier only; lexicon fitted on all non-hold references",
@@ -670,8 +719,7 @@ def _train(work, gt_path, n_train, hold_mod, mem, threads, seed, rounds, chunks,
     out.mkdir(parents=True, exist_ok=False)
     _save(m["A"], out / "model_A"); _save(m["B"], out / "model_B"); _save(m2, out / "model_2")
     extension = ".txt" if backend == "lgb" else ".json"
-    lab_keys = set(zip(hd["lab"].sid, hd["lab"].tid))
-    hk.assign(y=[(s,t) in lab_keys for s,t in zip(hk.sid,hk.tid)], p=hk["p_stage2"]).to_parquet(out / "hold_preds.parquet", index=False)
+    hk.assign(y=y[hold].astype(bool), p=hk["p_stage2"]).to_parquet(out / "hold_preds.parquet", index=False)
     pd.DataFrame({"sid": hold_sids}).to_parquet(out / "hold_sids.parquet", index=False)
     # Persist split membership by entity id (DuckDB's hash() may change across versions).
     ids = con.execute("SELECT r.entity_id, r.rid, s.g FROM split s JOIN rec r ON r.rid = s.sid WHERE s.g IS NOT NULL").df()
