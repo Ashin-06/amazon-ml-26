@@ -505,12 +505,20 @@ def train(work, gt_path, n_train=300_000, hold_mod=22, mem="20GB", threads=None,
         alltid = np.concatenate([hk.tid.values, comp.tid.values])
         allp = np.concatenate([p, comp.p.values])
         grid_t, grid_f, grid_local = {}, {}, {}
-        for t in np.arange(0.2, 0.96, 0.025):
-            t = round(float(t), 3)
-            dec = decide(allsid, alltid, allp, t)  # global ownership, metric over hold only
-            grid_t[t] = macro_f05(truth, dec, tune_sids)
-            grid_f[t] = macro_f05(truth, dec, final_sids)
-            grid_local[t] = macro_f05(truth, decide(hk.sid.values, hk.tid.values, p, t), hold_sids)
+
+        def score_at(t):
+            """Macro F0.5 on tune/final halves (global ownership) and hold-only ownership at threshold t."""
+            t = round(float(t), 4)
+            if t not in grid_t:
+                dec = decide(allsid, alltid, allp, t)  # global ownership, metric over hold only
+                grid_t[t] = macro_f05(truth, dec, tune_sids)
+                grid_f[t] = macro_f05(truth, dec, final_sids)
+                grid_local[t] = macro_f05(truth, decide(hk.sid.values, hk.tid.values, p, t), hold_sids)
+        for t in np.arange(0.2, 0.96, 0.025):  # coarse pass
+            score_at(t)
+        best = max(grid_t, key=grid_t.get)
+        for t in np.arange(max(0.0, best - 0.02), min(1.0, best + 0.02) + 1e-9, 0.0025):  # refine on tune only
+            score_at(t)
         thr = max(grid_t, key=grid_t.get)
         res[name] = {"threshold": thr, "tune_macro_f05": grid_t[thr], "final_macro_f05": grid_f[thr],
                      "local_ownership_hold_f05": grid_local[thr], "grid_tune": grid_t, "grid_final": grid_f}
