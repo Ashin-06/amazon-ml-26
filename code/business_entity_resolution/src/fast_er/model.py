@@ -331,11 +331,17 @@ def _fit(backend, P, X, y, w, names, rounds, valid=None):
           "max_leaves": P["num_leaves"], "grow_policy": "lossguide", "max_depth": 0, "min_child_weight": 5,
           "subsample": 0.8, "colsample_bytree": 0.8, "reg_lambda": 1.0, "max_bin": 256, "seed": P["seed"],
           "nthread": P["num_threads"] or 0, "verbosity": 1}
+    # No evaluation set: it only produced log lines and costs GPU memory.
     d = xgb.QuantileDMatrix(X, y, weight=w, feature_names=list(names))  # quantized: ~1 byte per value
-    ev = []
-    if valid is not None:
-        ev = [(xgb.QuantileDMatrix(valid[0], valid[1], ref=d, feature_names=list(names)), "hold")]
-    return xgb.train(xp, d, rounds, evals=ev, verbose_eval=100 if ev else False)
+    try:
+        return xgb.train(xp, d, rounds)
+    except xgb.core.XGBoostError as e:
+        if xp["device"] != "cuda" or "memory" not in str(e).lower():
+            raise
+        print(f"  [xgboost] GPU out of memory ({len(y):,} rows); retrying this booster on CPU", flush=True)
+        xp["device"] = "cpu"
+        del d
+        return xgb.train(xp, xgb.QuantileDMatrix(X, y, weight=w, feature_names=list(names)), rounds)
 
 
 def _pred(m, X, threads=None):
