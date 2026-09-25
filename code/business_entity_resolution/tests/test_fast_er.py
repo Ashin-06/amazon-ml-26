@@ -136,6 +136,7 @@ def test_skeleton_merges_transliterations_but_not_unrelated_names():
 
 def test_clean_name_removes_target_generator_noise():
     assert clean_name("Uppal Global Private Limited (ID: 49107)") == "Uppal Global Private Limited"
+    assert clean_name("Foster, Chiasson & Tucker Rogers #67631") == "Foster, Chiasson & Tucker Rogers"
     assert clean_name("Ma Vidyalaya | www.mavidyala.com") == "Ma Vidyalaya"
     assert clean_name("M/s People Cure Private Limited") == "People Cure Private Limited"
     assert clean_name("Smt Lakshmi Traders") == "Lakshmi Traders"
@@ -149,11 +150,13 @@ def test_clean_name_removes_target_generator_noise():
 
 def test_domain_names_are_segmented_with_reference_vocabulary():
     from fast_er import prep
-    vocab = frozenset({"regional", "creative", "towing", "vidyalaya", "badyne", "fou", "dai", "ton"})
+    vocab = {"regional": 9, "creative": 7, "towing": 3, "vidyalaya": 5, "badyne": 1, "fou": 2, "dai": 2, "ton": 4,
+             "clean": 50, "marine": 30, "systems": 80, "marin": 2, "esystems": 1}
     assert prep.segment("regionalcreativetowing", vocab) == "regional creative towing"
     assert prep.segment("hvidyalaya", vocab) == "h vidyalaya"
     assert prep.segment("badyne", vocab) == "badyne"  # known word stays whole
     assert prep.segment("foudaiton", vocab) == "foudaiton"  # only short pieces: kept
+    assert prep.segment("cleanmarinesystems", vocab) == "clean marine systems"  # common words win
     old = prep.VOCAB
     try:
         prep.VOCAB = vocab

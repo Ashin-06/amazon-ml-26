@@ -1130,8 +1130,10 @@ segment(stem, vocab=None)
 
 Split a glued domain stem into reference-name words, single letters as initials
 ("regionalcreativetowing" -> "regional creative towing", "hvidyalaya" -> "h vidyalaya").
-Longer words are preferred (score = sum of squared lengths); the stem is kept unchanged when it is a
-known word itself or cannot be covered mostly (>= 60%) by words of 4+ letters.
+Most probable split under a unigram model of reference-name word counts (common words win:
+"cleanmarinesystems" -> "clean marine systems", not "marin esystems"; an initial counts as a word seen
+once). The stem is kept unchanged when it is a known word itself or cannot be covered mostly (>= 60%)
+by words of 4+ letters.
 
 ### `clean_name`
 
@@ -1148,7 +1150,7 @@ remove generator noise (ID tags, URL tails, honorific prefixes, OCR digits) and 
 name_vocab(path)
 ```
 
-Lowercase transliterated words (2+ chars) of every reference name in one raw parquet.
+Counts of lowercase transliterated words (2+ chars) over every reference name in one raw parquet.
 
 ### `_init_worker`
 

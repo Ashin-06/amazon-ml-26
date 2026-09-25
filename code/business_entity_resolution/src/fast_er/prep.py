@@ -6,9 +6,11 @@ na (original name was non-ASCII, i.e. transliterated), rawn (raw name, no spaces
 Non-ASCII text (Indic scripts, French accents) is transliterated with anyascii
 so cross-script pairs share a Latin view. No external lookups.
 """
+import math
 import re
 import sys
 import time
+from collections import Counter
 from multiprocessing import Pool
 from pathlib import Path
 
@@ -136,10 +138,10 @@ FR_ALIAS = re.compile(r"(?i)(?<![A-Za-z0-9])(?:n[ée]e|anciennement)(?=\W)[:\s]*
 
 
 # Target-name noise seen in the supplied data (reference names almost never carry it):
-# "(ID: 49107)" tags, "| www.x.com" tails, "M/s"/"Shri"/"Smt"/"Mr"/"Dr" prefixes, OCR digits inside
+# "(ID: 49107)" / "#67631" tags, "| www.x.com" tails, "M/s"/"Shri"/"Smt"/"Mr"/"Dr" prefixes, OCR digits inside
 # words ("5ervices", "6lobal", "hea1th", "c0rp") and "ln" for "in" ("lnc", "lndia"), and names
 # replaced by a glued domain ("regionalcreativetowing.com").
-ID_TAG = re.compile(r"(?i)\s*[(\[]?\bid\b\s*[:#]?\s*\d+\s*[)\]]?\s*$")
+ID_TAG = re.compile(r"(?i)\s*(?:[(\[]?\bid\b\s*[:#]?\s*\d+\s*[)\]]?|#\s*\d+)\s*$")
 URL_TAIL = re.compile(r"(?i)\s*\|\s*(?:https?://)?(?:www\.)?[\w-]+\.(?:com|net|org|co\.in|in|co)\S*\s*$")
 HONORIFIC = re.compile(r"(?i)^\W*(?:m/s|sri|shri|smt|mrs|mr|dr)\b\.?\s+(?=\S)")
 OCR_WORD = re.compile(r"\b(?=[A-Za-z0-9]*[A-Za-z])(?=[A-Za-z0-9]*[01568])[A-Za-z0-9]+\b")
@@ -147,7 +149,7 @@ OCR_MAP = str.maketrans("01568", "olsgb")
 OCR_KEEP = re.compile(r"[2-479]|^\d+(?:st|nd|rd|th)$", re.I)  # other digits / ordinals are genuine
 LN_WORD = re.compile(r"\b[lL](?=[nN][A-Za-z])")
 DOMAIN = re.compile(r"(?i)^\W*(?:https?://)?(?:www\.)?([a-z0-9-]+)\.(?:com|net|org|co\.in|in|co)\W*$")
-VOCAB = frozenset()  # lowercase words of the split's reference names; set per worker by prepare()
+VOCAB = {}  # word -> count over the split's reference names; set per worker by prepare()
 
 
 def _ocr(m):
@@ -160,22 +162,26 @@ def _ocr(m):
 def segment(stem, vocab=None):
     """Split a glued domain stem into reference-name words, single letters as initials
     ("regionalcreativetowing" -> "regional creative towing", "hvidyalaya" -> "h vidyalaya").
-    Longer words are preferred (score = sum of squared lengths); the stem is kept unchanged when it is a
-    known word itself or cannot be covered mostly (>= 60%) by words of 4+ letters."""
+    Most probable split under a unigram model of reference-name word counts (common words win:
+    "cleanmarinesystems" -> "clean marine systems", not "marin esystems"; an initial counts as a word seen
+    once). The stem is kept unchanged when it is a known word itself or cannot be covered mostly (>= 60%)
+    by words of 4+ letters."""
     vocab = VOCAB if vocab is None else vocab
     n = len(stem)
     if not vocab or n < 5 or n > 60 or stem in vocab:
         return stem
+    total = math.log(sum(vocab.values()) + 1)
     best = [None] * (n + 1)
-    best[0] = (0, ())
+    best[0] = (0.0, ())
     for i in range(n):
         if best[i] is None:
             continue
         for j in range(i + 1, min(n, i + 30) + 1):
             w = stem[i:j]
-            if j - i > 1 and w not in vocab:
+            c = vocab.get(w, 0) if j - i > 1 else 1
+            if not c:
                 continue
-            cand = (best[i][0] + (j - i) ** 2 * (j - i > 1), best[i][1] + (w,))
+            cand = (best[i][0] + math.log(c) - total, best[i][1] + (w,))
             if best[j] is None or cand[0] > best[j][0]:
                 best[j] = cand
     parts = best[n][1] if best[n] else ()
@@ -207,13 +213,13 @@ def clean_name(text):
 
 
 def name_vocab(path):
-    """Lowercase transliterated words (2+ chars) of every reference name in one raw parquet."""
-    vocab = set()
+    """Counts of lowercase transliterated words (2+ chars) over every reference name in one raw parquet."""
+    vocab = Counter()
     for b in pq.ParquetFile(path).iter_batches(batch_size=200_000, columns=["business_name"]):
         for x in b.column("business_name").to_pylist():
             if isinstance(x, str) and x:
                 vocab.update(w for w in NON_ALNUM.split((x if x.isascii() else anyascii(x)).lower()) if len(w) >= 2)
-    return frozenset(vocab)
+    return dict(vocab)
 
 
 def _init_worker(vocab):
