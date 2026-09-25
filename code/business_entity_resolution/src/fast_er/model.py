@@ -282,8 +282,18 @@ def _load_truth(con, gt_path):
     return {"links": n_ok, "label_rows": n_lab, "targets_with_2plus_owners": dup_t}
 
 
+def pair_weights(sid, mode):
+    """Per-pair training weights. 'none': every pair 1. 'ref': each reference's pairs sum to a
+    constant (the metric averages per reference); 'sqrt': halfway (1/sqrt(n_candidates)). Mean 1."""
+    if mode == "none":
+        return None
+    n = pd.Series(sid).map(pd.Series(sid).value_counts()).to_numpy(np.float64)
+    w = 1.0 / n if mode == "ref" else 1.0 / np.sqrt(n)
+    return (w / w.mean()).astype(np.float32)
+
+
 def train(work, gt_path, n_train=300_000, hold_mod=22, mem="20GB", threads=None, seed=26, rounds=600,
-          chunks=8, leaves=127, lr=0.05):
+          chunks=8, leaves=127, lr=0.05, weight="none"):
     _check_args(n_train, hold_mod, chunks, rounds)
     t0 = time.time()
     lg = lambda msg: print(f"[train {time.time() - t0:.0f}s] {msg}", flush=True)  # noqa: E731
@@ -312,7 +322,11 @@ def train(work, gt_path, n_train=300_000, hold_mod=22, mem="20GB", threads=None,
         del Xs
         lg(f"{g}: {len(kk):,} pairs, pos rate {y.mean():.3f}")
     P = _params(threads, seed, leaves, lr)
-    m = {g: lgb.train(P, lgb.Dataset(data[g]["X"], data[g]["y"], feature_name=FEATS), rounds) for g in ("A", "B")}
+    if weight not in ("none", "ref", "sqrt"):
+        raise ValueError(f"weight must be none|ref|sqrt, got {weight!r}")
+    m = {g: lgb.train(P, lgb.Dataset(data[g]["X"], data[g]["y"], feature_name=FEATS,
+                                     weight=pair_weights(data[g]["keys"].sid.values, weight)), rounds)
+         for g in ("A", "B")}
     lg("stage-1 models fitted")
     # p1: out-of-fold for A/B, averaged for everything else (holdout + all other train S1s).
     data["A"]["p1"] = m["B"].predict(data["A"]["X"], num_threads=threads or 0)
@@ -333,7 +347,8 @@ def train(work, gt_path, n_train=300_000, hold_mod=22, mem="20GB", threads=None,
     X2 = np.vstack([data["A"].pop("X2"), data["B"].pop("X2")])
     y2 = np.concatenate([data["A"]["y"], data["B"]["y"]])
     hd = data["hold"]
-    m2 = lgb.train(P, lgb.Dataset(X2, y2, feature_name=FEATS2), rounds,
+    w2 = pair_weights(np.concatenate([data["A"]["keys"].sid.values, data["B"]["keys"].sid.values]), weight)
+    m2 = lgb.train(P, lgb.Dataset(X2, y2, feature_name=FEATS2, weight=w2), rounds,
                    valid_sets=[lgb.Dataset(hd["X2"], hd["y"], feature_name=FEATS2)],
                    callbacks=[lgb.log_evaluation(100)])
     hold_sids = con.execute("SELECT sid FROM split WHERE g = 'hold'").df().sid.tolist()
@@ -371,7 +386,7 @@ def train(work, gt_path, n_train=300_000, hold_mod=22, mem="20GB", threads=None,
     recall_ceiling = len(set(zip(hk.sid, hk.tid)) & set(zip(hd["lab"].sid, hd["lab"].tid))) / max(len(hd["lab"]), 1)
     metrics = {"holdout_macro_f05": res["stage2"]["final_macro_f05"], "threshold": res["stage2"]["threshold"],
                "params": {"n_train": n_train, "rounds": rounds, "leaves": leaves, "lr": lr, "hold_mod": hold_mod,
-                          "chunks": chunks, "seed": seed},
+                          "chunks": chunks, "seed": seed, "weight": weight},
                "labels": label_stats, "stage1": res["stage1"], "stage2": res["stage2"],
                "holdout_s1": len(hold_sids), "tune_s1": len(tune_sids), "final_s1": len(final_sids),
                "candidate_link_recall": recall_ceiling, "feature_names_stage1": FEATS, "feature_names_stage2": FEATS2,
