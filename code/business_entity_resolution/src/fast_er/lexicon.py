@@ -16,7 +16,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from .model import hold_rule, lit, normalized_sql
-from .prep import core_of
+from .prep import core_of, skeleton
 from .validation import load_truth
 from .integrity import digest
 
@@ -61,7 +61,7 @@ def build_lexicon(work, gt_path, hold_mod=22, min_count=3, min_share=0.5, split=
 
 
 def apply_lexicon(work, split):
-    """Rewrite name/core of non-ASCII-named records in work/<split>/norm_s*.parquet (idempotent via marker)."""
+    """Rewrite learned names and persist post-lexicon skeletons in bounded 100k-row batches."""
     w = Path(work) / split
     marker = w / "lexicon_applied"
     if marker.exists():
@@ -70,7 +70,8 @@ def apply_lexicon(work, split):
     changed = 0
     for path in (w / f"norm_s{i}.parquet" for i in (1,2,3)):
         source = pq.ParquetFile(path)
-        with pq.ParquetWriter(str(path) + ".tmp", source.schema_arrow) as writer:
+        schema = source.schema_arrow.append(pa.field("skel", pa.string()))
+        with pq.ParquetWriter(str(path) + ".tmp", schema) as writer:
             for batch in source.iter_batches(batch_size=100_000):
                 t = pa.Table.from_batches([batch])
                 na = t.column("na").to_pylist()
@@ -84,6 +85,7 @@ def apply_lexicon(work, split):
                             changed += 1
                 t = t.set_column(t.schema.get_field_index("name"), "name", pa.array(names))
                 t = t.set_column(t.schema.get_field_index("core"), "core", pa.array(cores))
+                t = t.append_column("skel", pa.array([skeleton(c) for c in cores], type=pa.string()))
                 writer.write_table(t)
         source.close()
         Path(str(path) + ".tmp").replace(path)

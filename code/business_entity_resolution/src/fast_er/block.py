@@ -99,11 +99,15 @@ def block(split, work="work", cap=300, k=25, k_field=10, chunks=8, threads=None,
               r AS (
                 SELECT *, row_number() OVER (PARTITION BY sid ORDER BY s DESC, tid) AS r_s,
                           row_number() OVER (PARTITION BY sid ORDER BY sn DESC, sa DESC, te DESC, tid) AS r_n,
-                          row_number() OVER (PARTITION BY sid ORDER BY sa DESC, tid) AS r_a
+                          row_number() OVER (PARTITION BY sid ORDER BY sa DESC, tid) AS r_a,
+                          rank() OVER (PARTITION BY sid ORDER BY s DESC) AS f_s,
+                          rank() OVER (PARTITION BY sid ORDER BY sn DESC, sa DESC, te DESC) AS f_n,
+                          rank() OVER (PARTITION BY sid ORDER BY sa DESC) AS f_a
                 FROM s)
-              SELECT sid, tid, s, sn, sa, nk, r_s::INTEGER AS r_s,
-                     (CASE WHEN sn > 0 THEN r_n ELSE 9999 END)::INTEGER AS r_n,
-                     (CASE WHEN sa > 0 THEN r_a ELSE 9999 END)::INTEGER AS r_a
+              SELECT sid, tid, s, sn, sa, nk, f_s::INTEGER AS r_s,
+                     (CASE WHEN sn > 0 THEN f_n ELSE 9999 END)::INTEGER AS r_n,
+                     (CASE WHEN sa > 0 THEN f_a ELSE 9999 END)::INTEGER AS r_a,
+                     r_s::INTEGER AS route_r_s, r_n::INTEGER AS route_r_n, r_a::INTEGER AS route_r_a
               FROM r WHERE r_s <= {k} OR (r_n <= {k_field} AND sn > 0) OR (r_a <= {k_field} AND sa > 0)
             ) TO {lit(part)} (FORMAT parquet)""")
         print(f"[block {split}] chunk {c + 1}/{chunks} {time.time() - t0:.0f}s", flush=True)
@@ -122,7 +126,7 @@ def blocking_recall(split="train", work="work", gt_path="work/pq/train_ground_tr
     con.execute(f"CREATE VIEW rec AS SELECT * FROM read_parquet({normalized_sql(w)})")
     load_truth(con, gt_path)
     res = {}
-    for label, cond in (("all", "TRUE"), ("top_s10", "c.r_s <= 10"), ("top_s25", "c.r_s <= 25")):
+    for label, cond in (("all", "TRUE"), ("top_s10", "c.route_r_s <= 10"), ("top_s25", "c.route_r_s <= 25")):
         r = con.execute(f"""
             WITH hit AS (SELECT g.sid, count(c.tid) AS hits, count(*) AS n FROM gt g
                          LEFT JOIN (SELECT * FROM read_parquet({lit(w / 'cands.parquet')}) c WHERE {cond}) c USING (sid, tid) GROUP BY g.sid),
@@ -132,6 +136,6 @@ def blocking_recall(split="train", work="work", gt_path="work/pq/train_ground_tr
                     FROM s1 LEFT JOIN hit h USING (sid))
             FROM hit""").fetchone()
         res[label] = {"link_recall": r[0], "oracle_f05": r[1]}
-    res["pairs_per_s1"] = con.execute(f"SELECT count(*) / count(DISTINCT sid) FROM read_parquet({lit(w / 'cands.parquet')})").fetchone()[0]
+    res["pairs_per_s1"] = con.execute(f"SELECT count(*) / (SELECT count(*) FROM rec WHERE src=1) FROM read_parquet({lit(w / 'cands.parquet')})").fetchone()[0]
     con.close()
     return res

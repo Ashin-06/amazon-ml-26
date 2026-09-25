@@ -2,7 +2,11 @@
 
 This checkout contains the corrected fast pipeline and the older SQLite baseline. See [the review](../../docs/FINAL_HARDENING_REVIEW_2026-09-25.md), [runbook](../../docs/RUNBOOK.md) and [function reference](../../docs/FUNCTION_REFERENCE.md).
 
-The fast model uses 50 pair features and 17 context/cluster features. Two first-stage classifiers are cross-fitted; the second stage uses their probabilities and competition context. The learned lexicon excludes held references. Thresholds use tuning macro F0.5, then final holdout is evaluated once with production scoring over the complete candidate graph.
+The fast model uses 53 pair features and 17 context/cluster features. Two first-stage classifiers are cross-fitted; the second stage uses their probabilities and competition context. The learned lexicon excludes held references. Thresholds use tuning macro F0.5, then final holdout is evaluated once with production scoring over the complete candidate graph.
+
+Candidate export follows the organizer's clarified cascade rule: include every input to the first scoring model, even when stage 1 rejects it before stage 2. Rejected pairs have a cascade decision score of zero and stage2_scored=false. They still count toward candidate efficiency. Only pruning before model scoring can reduce the reported candidate set. See [the updated rules and measured frontier](../../docs/RULES_AND_MAXIMUM_SCORE_REVIEW_2026-09-25.md).
+
+Both fitting stages use the --n-train reference sample by default; --stage2-all-references explicitly expands stage 2. Full-graph context and evaluation still process all supplied candidates. Cached XGBoost batches reduce float-matrix duplication, but QuantileDMatrix keeps the combined quantized data in memory. No full-data fit is guaranteed by the batch iterator. GPU prediction transfers at most 65,536 rows at a time and retries allocation failures on CPU.
 
 | Module | Role |
 |---|---|
@@ -12,6 +16,7 @@ The fast model uses 50 pair features and 17 context/cluster features. Two first-
 | model.py | Features, weights, LightGBM/XGBoost, threshold selection and output |
 | validation.py | Record/label/endpoint/country/ownership checks |
 | integrity.py | Code, data, environment, model and output manifests |
+| efficiency.py | Read-only tuning frontier: candidates/reference, percentiles, recall, oracle F0.5 and reduction ratio |
 | run_stage1.py / run_stage3.py | Supported drivers |
 
 Install requirements-dev.txt into an isolated Python 3.12 environment. CPU LightGBM is the default. XGBoost 3.0.0 is pinned; select backend xgb/auto explicitly when desired. A Kaggle GPU request alone does not select a model backend.

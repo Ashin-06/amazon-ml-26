@@ -1,70 +1,48 @@
-<!-- DRAFT: fill team fields and the final selected run's numbers before submission -->
-> Implementation remains a draft. The v15 checkout has 52 pair and 17 context features, production-consistent global evaluation and verified seed ensembles. It has no measured full-data score yet; historical run results below must be replaced with the selected run's actual results before submission.
-
+<!-- DRAFT: fill actual team details and selected-run measurements before submission -->
 # ML Challenge 2026: Business Entity Resolution Solution
 
-**Team Name:** [Your Team Name] · **Team Members:** [List all team members] · **Submission Date:** [Date]
+**Team Name:** [Your Team Name]
 
-## 1. Executive Summary
-Blocking + learned matcher, built only on the supplied data. Records are normalized (transliteration, abbreviation
-and state canonicalization, alias/phone/OCR/ID-tag cleanup, domain-name splitting) and a **transliteration lexicon learned from the training labels**
-maps native-script Indian spellings to English. Candidates come from a bulk DuckDB join over hashed name, address and
-**name×address-word** keys. A **two-stage LightGBM** matcher scores pairs (stage 2 sees how each pair compares with
-competing candidates), each target is given to at most one reference, and the threshold maximizes macro F0.5.
+**Team Members:** [List all team members]
 
-## 2. Methodology
-**Problem analysis.** 2.2M train references vs 10.3M targets (test: 1.73M vs 10.0M, France only in test). Links average
-3.5 per reference; 5.6% of references have none; no target belongs to two references and no link crosses countries.
-Main noise: legal-suffix/typo/reordering name variants, "Brand DBA Real Name" aliases (2.4% of Source-3 names),
-appended phone numbers, Indian names in Devanagari/Bengali/Kannada/Tamil (28% of India S2 names), abbreviated or
-reordered addresses, zero-padded house numbers, 3–4% missing target addresses, very generic Indian names shared
-by hundreds of businesses, and target-only name noise: OCR digits inside words ("5ervices", "hea1th"; 2.6% of target
-names, ~0% of references), glued domains ("regionalcreativetowing.com"), "(ID: n)" tags and M/s/Sri/Smt/Mr/Dr prefixes. **Approach type:** blocking + two-stage gradient-boosted classifier + one-owner assignment.
+**Submission Date:** [Date]
 
-## 3. Candidate Generation (Blocking)
-Keys per record, namespaced by country (open set, France included): name tokens, adjacent/whole-name concatenations
-(catch @handles/domains), whole core name, **name-token × address-word** composites ("pioneerinfotech|pune": keeps
-generic names blockable within their city), address tokens and bigrams. Keys held by >300 targets are dropped (1,000
-for whole names). Pairs are scored by summed idf; per reference we keep top-40 overall ∪ top-20 by name ∪ top-20 by
-address (≈49 candidates; full-train link recall 97.05%). **Learned filter:** a first-stage classifier on cheap
-name/address similarities keeps pairs with probability ≥ 0.01, leaving **≈3.9 candidates per reference** (true links
-average 3.45) while dropping 0.08% of true links and no predicted link (v12 holdout). Only these pairs reach the final
-matcher, and `candidate_pairs.tsv` lists exactly them.
+## 1. Executive summary
 
-## 4. Matching Model
-**Features (≈50):** RapidFuzz ratio / token-sort / token-set / partial / Jaro-Winkler on name, core name, raw joined
-name and address; digit-token agreement, house-number similarity and delta (typo vs neighbouring number); missing-address flags; how many records share
-the exact name/address; blocking scores and ranks; cluster support (candidates sharing the same name/address).
-**Model:** LightGBM (MIT). Stage 1: two models on disjoint reference halves give out-of-fold probabilities. Stage 2 adds
-context: the pair's rank and share within its reference and within its source, and the best competing reference's
-probability for the same target. **Decision:** probability ≥ τ, then each target goes to its single best reference
-(ties: lowest id). τ is tuned on half of a held-out reference set; F0.5 is reported on the other, untouched half.
+We use country-aware name/address/composite blocking, a two-stage boosted-tree matching cascade and global target ownership. The pipeline uses only supplied records and permitted offline algorithm libraries. The selected model and final measurements are pending; this document is not ready for submission.
 
-## 5. Experiments & Results
-Holdout = ~100k training references never used for fitting or for the lexicon. "Final-half" = threshold tuned on one
-half, scored on the other (same protocol for all rows in the last column).
+## 2. Data and validation
 
-| Run | Change | Candidate recall / ceiling | Holdout F0.5 (tuned on hold) | Final-half F0.5 |
-|---|---|---|---|---|
-| v1 | token blocking + single LightGBM | 0.9145 / 0.9656 | 0.9422 | – |
-| v2 | + learned lexicon, frequency features, two-stage context | 0.9203 / 0.9680 | 0.9535 | – |
-| v3 | + number/ordinal/French normalization, short-token and whole-name keys | 0.9329 / 0.9735 | 0.9578 | – |
-| v4 | + name×address keys, larger candidate budget, house-number, raw-name and cluster features | 0.9664 / 0.9890 | 0.9762 | 0.9758 |
-| v10 | + short-name composites, whole-name cap, alias & phone cleanup, per-source context, per-reference weights | 0.9705 / 0.9905 | [TBD] | 0.9774 |
-| v15 | + target-name noise cleaning, domain splitting, house-number deltas (audit-hardened evaluation) | [pending] | [pending] | [pending] |
+Sources are parsed as explicit UTF-8 TSVs with string IDs. Original text, empty lists, singletons and every country including France are preserved. IDs support joining, stable splits and deterministic routing, never predictive features. Tied evidence receives identical model rank features.
 
-Also tested: expected-F0.5 subset selection and separate thresholds per country or for the top candidate (no gain);
-per-reference sample weights (small gain on a pilot). **Errors:** misses dominate (≈9 missed links per false link);
-64% of missed links were never retrieved; nearly half of those have an empty target address (often a generic name).
-Exact-name links to empty-address targets are only resolvable when the name is unique (98% true) and fall to
-≈1/k when k references share it, so part of the 0.9905 ceiling is unreachable. False links are mainly
-a different business at the same or neighboring address. France has no labels: its predicted match rate (5.8% empty,
-3.4 links/reference) matches US/India.
+S1 reference groups are separated into fitting, tuning and final evaluation groups with a stable rule. The supervised lexicon excludes all hold references. Classifier cross-fitting is implemented, but the shared non-hold lexicon means this is not complete pipeline cross-fitting. Thresholds use tuning data. Production-consistent global ownership precedes one final evaluation per run. Previously inspected final scores cannot be described as permanently untouched.
 
-## 6. Conclusion
-Recall was the main lever: at full scale plain token blocking lost 8.5% of true links on generic and native-script
-Indian names; a label-learned lexicon and name×city keys recovered most of them. A context-aware second stage, the
-one-owner constraint and a threshold tuned directly on macro F0.5 then handle the precision-weighted metric.
-No external data, APIs or pretrained weights are used; the model is LightGBM (MIT).
+The metric is exact per-reference macro F0.5, with empty/empty equal to one and every reference in the denominator. France has no labeled training data; output counts do not establish its accuracy.
 
-**Code:** `code/business_entity_resolution/` (README has exact commands); full details in `METHODOLOGY_DETAILS.md` (same zip).
+## 3. Blocking and candidate contract
+
+Country-namespaced keys include name tokens, adjacent/whole-name concatenations, address tokens/bigrams and name-address composites. Common postings are capped. The baseline union keeps total-score, name-score and address-score routes. Budgets must be selected using retrieval quality and candidate cost together.
+
+Following the organizer's cascade clarification, candidate_pairs.tsv contains every pair fed to the FIRST scoring model. Stage-1 rejection can reduce stage-2 work but does not reduce the official candidate count. Every final match belongs to that complete set. Text-identical matching target IDs are not collapsed.
+
+Report the selected run's total pairs, mean/p95/p99/maximum candidates per reference, zero-candidate references, same-country reduction ratio, candidate recall and oracle macro F0.5. Oracle is a labeled-data upper bound, not a model score.
+
+## 4. Models and features
+
+The implementation supports LightGBM (MIT) and XGBoost (Apache-2.0). CPU LightGBM is the default; the final selected backend is pending. There are 53 pair features and 17 context features covering string/phonetic similarities, numeric/address evidence, missingness, frequency, blocking evidence, within-reference support and competing-reference context.
+
+Stage 1 uses disjoint fitting folds. Stage 2 consumes cross-fitted probabilities and context. Early-rejected pairs receive a cascade decision score of zero and remain exported. Each target goes to its highest-scoring eligible reference; a reference may receive zero or many target IDs.
+
+Both fitting stages use the requested sample unless expansion is explicit. Cached features reduce duplicate work. Post-lexicon skeletons use 100,000-row batches; GPU prediction transfers at most 65,536 rows. QuantileDMatrix retains quantized data in memory, so full-data resources require measurement.
+
+## 5. Results to replace with the selected run
+
+Historical frozen v14 at de77cbc: tuning F0.5 0.979377; final F0.5 0.978897. Its 50,141 tuning references have mean 48.806 candidates and oracle F0.5 0.990872. These are not results of the latest source. A 0.99+ score has not been established.
+
+Selected-run code/model fingerprints, full test generation, official validator results, public score and actual resource measurements: **pending**. Do not substitute synthetic tests, retrieval oracles or older scores.
+
+## 6. Reproduction and limitations
+
+The README/runbook define fresh-run commands. Inputs, source, dependencies, derived stages, model and outputs are fingerprinted. Outputs are not overwritten; partial-stage resume is unsupported. Both TSVs are validated for exact S1 coverage, IDs, countries, duplicates and containment. Archives use an explicit allowlist and exclude credentials/account settings.
+
+No external business lookup, geocoding, hosted inference API or external dataset is used. Validation includes competitors from fitted references, and full-pipeline cross-fitting is not claimed. Hidden-test performance, France accuracy and new-version full-scale resources remain unmeasured. Complete this draft only after selecting and verifying the final run.

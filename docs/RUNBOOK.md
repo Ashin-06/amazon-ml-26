@@ -24,6 +24,19 @@ The memory limit applies to DuckDB, not all Python/booster allocations. Correcte
 
 Use --skip-predict for training/evaluation only or --skip-train for matching saved models. Each experiment needs a new work/model destination. Completed blocking may be reused only after exact manifest verification; partial work does not resume. Manual-threshold rewrites of legacy scores are rejected.
 
+The default backend is CPU LightGBM. Both fitting stages use the --n-train sample. Use --stage2-all-references only after measuring resources and deliberately choosing to fit stage 2 on all non-hold references. This does not change the full-graph context/evaluation cost. XGBoost QuantileDMatrix concatenates quantized batches in memory; it is not an external-memory guarantee. GPU allocation retries cover matrix creation/training and bounded inference transfers, and fitted devices are recorded per model.
+
+## Candidate efficiency under the clarified rule
+
+candidate_pairs.tsv contains every input to the FIRST scoring model. Stage-1 rejection saves stage-2 compute but never reduces exported candidates. The output score table records stage2_scored; a zero cascade score is used for an early-rejected pair. Candidate means include references with zero candidates. Routing ranks may break ties deterministically, but model rank features give tied evidence the same value.
+
+The read-only diagnostic below fingerprints the historical completed stage and evaluates only its fixed tuning references. It does not let changed source reuse historical inputs for training and does not read final-holdout labels. PowerShell, from this checkout:
+
+    $env:PYTHONPATH = (Resolve-Path 'code/business_entity_resolution/src').Path
+    python -m fast_er.efficiency 'D:/Amazon ML 26/work/v14/run' 'D:/Amazon ML 26/work/v14/pq/train_ground_truth.parquet' artifacts/frontier-new.json --sample 50141 --mem 1GB --threads 1
+
+Use a new report filename. Compare mean/p95/p99/max candidates, reduction ratio, candidate recall and oracle F0.5 together. This is a retrieval ceiling, not a model score. The completed [review](RULES_AND_MAXIMUM_SCORE_REVIEW_2026-09-25.md) explains why none of the smaller rank policies measured here is ready for a 0.99 target.
+
 ## Optional verified seed ensemble
 
 Keep the same blocking run. Train a second model with --seed 27 --model-dir model_s27 and a distinct prediction destination. The saved tune/final membership is fixed across seeds. CPU pilots remain the default.

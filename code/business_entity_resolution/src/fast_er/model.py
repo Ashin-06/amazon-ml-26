@@ -30,8 +30,6 @@ from rapidfuzz import fuzz
 from rapidfuzz.distance import JaroWinkler
 from rapidfuzz.process import cpdist
 
-from .prep import skeleton
-
 from .integrity import code_digest, digest, environment, files_digest, seal, verify, verify_stage
 from .validation import load_truth, validate_pairs, validate_records
 
@@ -42,6 +40,7 @@ REC_SQL = """
 CREATE TABLE rec AS
 WITH r AS (SELECT * FROM read_parquet({glob}))
 SELECT r.*,
+  regexp_extract_all(r.addr, '[0-9]+') AS nums,
   sum((src > 1)::INT) OVER (PARTITION BY country, core) AS fc_t,
   sum((src = 1)::INT) OVER (PARTITION BY country, core) AS fc_s,
   CASE WHEN addr = '' THEN -1 ELSE sum((src > 1)::INT) OVER (PARTITION BY country, addr) END AS fa_t
@@ -71,10 +70,8 @@ CTX = ["p1", "p1_rank", "p1_max", "p1_sum", "p1_n05", "p1_rel", "p1_trank", "p1_
        "p1_srank", "p1_sn05", "p1_smax", "anc_name", "anc_core", "anc_addr", "anc_n"]
 FEATS2 = FEATS + CTX
 ANCHOR_P, ANCHOR_K, ANCHOR_MIN = 0.3, 4, 0.02
-# Learned candidate filter = last candidate-generation step. Blocking keeps ~49 targets per reference; the
-# stage-1 classifier then drops pairs with p1 < CAND_P. Measured on v12's 100k holdout: 48.7 -> 3.9 candidates
-# per reference, 278 of 347,987 true links (0.08%) dropped, no predicted link lost. Only kept pairs reach the
-# matcher (stage 2) in training, evaluation and inference, and candidate_pairs.tsv lists exactly them.
+# Early rejection reduces stage-2 work, not the reported candidate set. Organizer clarification
+# rows 133/152 requires the input to the FIRST scoring model, including subsequently rejected pairs.
 CAND_P = 0.01
 
 CTX_SQL = """
@@ -216,23 +213,11 @@ def _connect(work, split, mem, threads):
     w = Path(work) / split
     con.execute(REC_SQL.format(glob=normalized_sql(w)))
     validate_records(con)
-    if "rawn" not in [r[0] for r in con.execute("DESCRIBE rec").fetchall()]:
-        raise ValueError("Prepared data lacks raw-name features; rebuild")
-    # Phonetic skeleton of the (post-lexicon) core name, computed once per record.
-    con.execute("CREATE OR REPLACE TABLE skel (rid INTEGER, skel VARCHAR)")
-    for k in range(16):  # bounded batches: at most ~1/16 of the records in Python at a time
-        sk = con.execute(f"SELECT rid, core FROM rec WHERE rid % 16 = {k}").df()
-        sk["skel"] = [skeleton(x) for x in sk.core.tolist()]
-        con.register("skdf", sk[["rid", "skel"]])
-        con.execute("INSERT INTO skel SELECT rid, skel FROM skdf")
-        con.unregister("skdf")
-        del sk
-    # skel + the address's digit tokens (house/plot numbers, PIN/ZIP), both computed once per record
-    con.execute("""CREATE OR REPLACE TABLE rec AS SELECT r.*, k.skel, regexp_extract_all(r.addr, '[0-9]+') AS nums
-                   FROM rec r JOIN skel k USING (rid)""")
+    columns = {r[0] for r in con.execute("DESCRIBE rec").fetchall()}
+    if not {"rawn", "skel"}.issubset(columns):
+        raise ValueError("Prepared data lacks raw-name/skeleton features; rebuild")
     if con.execute("SELECT count(*) FROM rec WHERE skel IS NULL").fetchone()[0]:
         raise ValueError("skeleton missing for some records")
-    con.execute("DROP TABLE skel")
     con.execute(GROUP_SQL.format(cands=lit(w / "cands.parquet")))
     validate_pairs(con, "c")
     return con
@@ -400,7 +385,7 @@ def _cupy():
 
 def _xgb_train(P, make, n, rounds):
     """Train on the GPU when usable; if the GPU runs out of memory, rebuild the matrix on the host and
-    train on CPU. `make(gpu)` builds the quantized matrix (~1 byte per value; built directly in GPU memory
+    train on CPU. `make(gpu)` builds the quantized matrix (built directly in GPU memory
     from CuPy blocks when gpu is True). No evaluation set (it only cost GPU memory)."""
     import xgboost as xgb
     device = "cuda" if gpu_available() else "cpu"
@@ -409,16 +394,20 @@ def _xgb_train(P, make, n, rounds):
         cp = _cupy()
         if cp is not None:
             cp.get_default_memory_pool().free_all_blocks()  # staging blocks must not starve XGBoost
-        return xgb.train(_xgb_params(P, device), d, rounds)
+        booster = xgb.train(_xgb_params(P, device), d, rounds)
+        booster.set_attr(training_device=model_device(booster), cpu_retry="false")
+        return booster
     except Exception as e:  # XGBoostError or CuPy OutOfMemoryError
-        if device != "cuda" or "memory" not in str(e).lower():
+        if device != "cuda" or not is_memory_failure(e):
             raise
         print(f"  [xgboost] GPU out of memory ({n:,} rows); retrying this booster on CPU", flush=True)
         d = None
         cp = _cupy()
         if cp is not None:
             cp.get_default_memory_pool().free_all_blocks()
-        return xgb.train(_xgb_params(P, "cpu"), make(False), rounds)
+        booster = xgb.train(_xgb_params(P, "cpu"), make(False), rounds)
+        booster.set_attr(training_device=model_device(booster), cpu_retry="true")
+        return booster
 
 
 def _fit(backend, P, X, y, w, names, rounds, valid=None):
@@ -428,28 +417,35 @@ def _fit(backend, P, X, y, w, names, rounds, valid=None):
         return lgb.train(P, lgb.Dataset(X, y, feature_name=list(names), weight=w), rounds, valid_sets=vs,
                          callbacks=[lgb.log_evaluation(100)] if vs else [])
     import xgboost as xgb
-    return _xgb_train(P, lambda gpu: xgb.QuantileDMatrix(X, y, weight=w, feature_names=list(names)), len(y), rounds)
+    return _xgb_train(P, lambda gpu: xgb.QuantileDMatrix(X, y, weight=w, feature_names=list(names),
+                      nthread=P["num_threads"] or 1), len(y), rounds)
 
 
 def _fit_parts(backend, P, loaders, y, w, names, rounds):
     """_fit for training rows kept on disk: `loaders` return consecutive row blocks matching y / w.
-    XGBoost streams the blocks into its quantized matrix (~1 byte per value), so every reference fits in
-    memory; LightGBM (small runs and tests) concatenates them."""
+    QuantileDMatrix still holds the combined quantized data in memory: this is not external-memory
+    training or a guarantee that full data fits. LightGBM concatenates the float matrices."""
     if backend == "lgb":
         return _fit(backend, P, np.vstack([f() for f in loaders]), y, w, names, rounds)
     import xgboost as xgb
 
     class Blocks(xgb.DataIter):
+        """Repeatable feature batches aligned with labels and optional reference weights."""
+
         def __init__(self, cp):
+            """Initialize one repeatable batch iterator with an optional GPU array module."""
             self.i = self.off = 0
             self.cp = cp
             super().__init__()
 
         def next(self, input_data):
+            """Supply one aligned feature/label/weight block to XGBoost."""
             if self.i == len(loaders):
                 return False
             X = loaders[self.i]()
             n = len(X)
+            if X.ndim != 2 or X.shape[1] != len(names) or self.off + n > len(y):
+                raise ValueError("Streamed feature shape does not match labels/schema")
             lab = y[self.off:self.off + n].astype(np.float32)
             wt = None if w is None else w[self.off:self.off + n]
             if self.cp is not None:  # build the quantized matrix directly in GPU memory
@@ -460,22 +456,59 @@ def _fit_parts(backend, P, loaders, y, w, names, rounds):
             return True
 
         def reset(self):
+            """Rewind and verify that a completed pass consumed every label."""
             if self.i == len(loaders) and self.off != len(y):
                 raise ValueError("Streamed rows do not match the labels")
             self.i = self.off = 0
 
-    return _xgb_train(P, lambda gpu: xgb.QuantileDMatrix(Blocks(_cupy() if gpu else None), max_bin=256), len(y), rounds)
+    return _xgb_train(P, lambda gpu: xgb.QuantileDMatrix(Blocks(_cupy() if gpu else None), max_bin=256,
+                      nthread=P["num_threads"] or 1), len(y), rounds)
+
+
+def model_device(booster):
+    """Read the actual booster device, never infer GPU execution from hardware availability."""
+    if isinstance(booster, lgb.Booster):
+        return "cpu"
+    return json.loads(booster.save_config())["learner"]["generic_param"]["device"]
+
+
+def is_memory_failure(error):
+    """Recognize allocation failures without masking unrelated model or schema errors."""
+    import xgboost as xgb
+    eligible = isinstance(error, (MemoryError, xgb.core.XGBoostError)) or type(error).__module__.startswith("cupy")
+    message = str(error).lower()
+    return eligible and (isinstance(error, MemoryError) or any(t in message for t in
+        ("out of memory", "outofmemory", "bad allocation", "memoryallocation", "memory allocation", "alloc_failed")))
 
 
 def _pred(m, X, threads=None):
-    """Match probability for the rows of X, from either booster type."""
+    """Predict with bounded GPU transfers; preserve CPU fallback for the remaining batches."""
     if isinstance(m, lgb.Booster):
         return m.predict(X, num_threads=threads or 1)
-    cp = _cupy()
-    if cp is not None and len(X):  # predict on the GPU from a GPU copy (no slow host-DMatrix fallback)
-        m.set_param({"device": "cuda"})
-        out = cp.asnumpy(m.inplace_predict(cp.asarray(X))).astype(np.float64)
-        cp.get_default_memory_pool().free_all_blocks()
+    cp = _cupy() if model_device(m).startswith("cuda") else None
+    if cp is not None and len(X):
+        out = np.empty(len(X), np.float64)
+        for start in range(0, len(X), 65536):
+            block = None
+            stop = min(start+65536, len(X))
+            try:
+                if cp is None:
+                    out[start:stop] = m.inplace_predict(X[start:stop])
+                else:
+                    block = cp.asarray(X[start:stop])
+                    out[start:stop] = cp.asnumpy(m.inplace_predict(block))
+            except Exception as error:
+                if cp is None or not is_memory_failure(error):
+                    raise
+                block = None
+                cp.get_default_memory_pool().free_all_blocks()
+                m.set_param({"device":"cpu"})
+                cp = None
+                out[start:stop] = m.inplace_predict(X[start:stop])
+            finally:
+                block = None
+                if cp is not None:
+                    cp.get_default_memory_pool().free_all_blocks()
         return out
     return np.asarray(m.inplace_predict(X), dtype=np.float64)
 
@@ -496,7 +529,8 @@ def _load(base):
     if js.exists():
         import xgboost as xgb
         b = xgb.Booster(model_file=str(js))
-        b.set_param({"device": "cuda" if gpu_available() else "cpu"})
+        trained = b.attr("training_device") or "cpu"
+        b.set_param({"device": "cuda" if trained.startswith("cuda") and gpu_available() else "cpu"})
         return b
     return lgb.Booster(model_file=str(txt))
 
@@ -539,7 +573,9 @@ def _predict_stage1(con, models, where, threads, chunks, tmp=None, tag=""):
         print(f"  [stage1 {tag}] chunk {k + 1}/{chunks}: {len(df):,} pairs", flush=True)
     if not keys:
         return pd.DataFrame({"sid": [], "tid": []}, dtype="int32"), np.empty(0)
-    return pd.concat(keys, ignore_index=True), np.concatenate(p1)
+    probabilities = np.concatenate(p1)
+    check_scores(probabilities, name="stage1")
+    return pd.concat(keys, ignore_index=True), probabilities
 
 
 def _check_args(n_train, hold_mod, chunks, rounds):
@@ -555,8 +591,7 @@ def _load_truth(con, gt_path):
 
 
 def _score_all(con, models, m2, threads, chunks, tmp_parent):
-    """Score the complete graph using the production pipeline and run-owned disk caches.
-    Returns only the pairs kept by the learned candidate filter (the matcher's inputs)."""
+    """Return every first-model input; early-rejected pairs have a cascade decision score of zero."""
     Path(tmp_parent).mkdir(parents=True, exist_ok=True)
     own = Path(tempfile.mkdtemp(prefix="fe_", dir=tmp_parent))
     try:
@@ -564,7 +599,7 @@ def _score_all(con, models, m2, threads, chunks, tmp_parent):
         keep = p1 >= CAND_P  # learned candidate filter: only these pairs reach the matcher
         kept = keys[keep].reset_index(drop=True)
         _context(con, kept.sid.values, kept.tid.values, p1[keep], chunks=chunks, threads=threads)
-        p2, off = [], 0
+        p2, off = np.zeros(len(keys), dtype=np.float64), 0
         for k in range(chunks):
             path = own / f"x{k}.npy"
             if not path.exists():
@@ -572,14 +607,13 @@ def _score_all(con, models, m2, threads, chunks, tmp_parent):
             X = np.load(path, allow_pickle=False)
             s = keep[off:off + len(X)]
             kk = keys.iloc[off:off + len(X)][s]
-            off += len(X)
             if s.any():
-                p2.append(_pred(m2, np.hstack([X[s], _ctx_matrix(con, kk)]), threads))
+                p2[off:off + len(X)][s] = _pred(m2, np.hstack([X[s], _ctx_matrix(con, kk)]), threads)
+            off += len(X)
         if off != len(keys):
             raise ValueError("Stage-2 candidate coverage mismatch")
-        p2 = np.concatenate(p2) if p2 else np.empty(0)
         check_scores(p2)
-        return kept, p1[keep], p2
+        return keys, p1, p2
     finally:
         shutil.rmtree(own)
 
@@ -612,33 +646,34 @@ def model_path(work, name):
     return result
 
 
-def train(work, gt_path, n_train=300_000, hold_mod=22, mem="20GB", threads=None, seed=26, rounds=600,
-          chunks=8, leaves=127, lr=0.05, weight="none", backend="auto", model_dir="model"):
+def train(work, gt_path, n_train=10_000, hold_mod=22, mem="4GB", threads=1, seed=26, rounds=600,
+          chunks=8, leaves=127, lr=0.05, weight="none", backend="lgb", model_dir="model", stage2_all=False):
     """Fit classifiers and stacker, then evaluate disjoint tune/final reference groups.
 
     Stacker inputs use classifier-level cross-fitting. The learned lexicon uses
     non-hold references, so this is not full-pipeline cross-fitting. Every training
     candidate is featurized once; the stage-1 matrices are cached in a run-owned scratch
     directory (removed afterwards), streamed into the boosters and reused for the production-scoring
-    evaluation pass. n_train above the number of non-holdout references trains on all of them.
+    evaluation pass. Stage 2 uses the same bounded reference sample unless stage2_all is explicit.
+    Complete-graph context/evaluation still scans all candidates and needs measured resources.
     """
     Path(scratch(work)).mkdir(parents=True, exist_ok=True)
     own = Path(tempfile.mkdtemp(prefix="fe_train_", dir=scratch(work)))
     try:
         return _train(work, gt_path, n_train, hold_mod, mem, threads, seed, rounds, chunks, leaves, lr,
-                      weight, backend, model_dir, own)
+                      weight, backend, model_dir, own, stage2_all)
     finally:
         shutil.rmtree(own, ignore_errors=True)
 
 
 def _train(work, gt_path, n_train, hold_mod, mem, threads, seed, rounds, chunks, leaves, lr, weight, backend,
-           model_dir, own):
+           model_dir, own, stage2_all=False):
     """Body of train(); `own` is the scratch directory for cached stage-1 matrices.
 
     Every training candidate (all references: fit groups A/B, holdout, others) is featurized exactly once,
     one sid-slice at a time; matrices live on disk and boosters read them block by block. n_train sets the
-    stage-1 references (A + B; above the non-holdout count means all); stage 2 always learns from every
-    non-holdout reference. Pairs below the learned candidate filter (CAND_P) never reach stage 2."""
+    stage-1 references (A + B; above the non-holdout count means all). Stage 2 uses A/B by default;
+    stage2_all explicitly expands fitting to all non-holdout references. Early rejection skips stage 2."""
     _check_args(n_train, hold_mod, chunks, rounds)
     P = _params(threads, seed, leaves, lr)
     if weight not in ("none", "ref", "sqrt"):
@@ -726,10 +761,11 @@ def _train(work, gt_path, n_train, hold_mod, mem, threads, seed, rounds, chunks,
     np.save(own / "p1p.npy", p1p)
     del p1p
     # Candidate filter, then stage-2 context over the kept candidates only (training rows: out-of-fold p1).
-    # Stage 2 learns from every non-holdout reference: A/B with out-of-fold p1, the rest with the production mean.
+    # A/B use out-of-fold p1; explicit stage2_all also includes other non-hold references with the production mean.
+    check_scores(p1, name="training stage1")
     kt = p1 >= CAND_P
     _context(con, sid[kt], tid[kt], p1[kt], chunks=chunks, threads=threads)
-    fit2 = (grp != 2) & kt
+    fit2 = ((grp != 2) if stage2_all else (grp < 2)) & kt
     w2 = pair_weights(sid[fit2], weight)
     lg(f"stage 2 rows: {int(fit2.sum()):,} of {int((grp != 2).sum()):,} non-holdout blocked pairs (p1 >= {CAND_P})")
     del kt, p1
@@ -751,7 +787,7 @@ def _train(work, gt_path, n_train, hold_mod, mem, threads, seed, rounds, chunks,
     p1 = np.load(own / "p1p.npy")
     kp = p1 >= CAND_P
     _context(con, sid[kp], tid[kp], p1[kp], chunks=chunks, threads=threads)
-    p2 = np.full(len(sid), np.nan)
+    p2 = np.zeros(len(sid), dtype=np.float64)
     for i, f in enumerate(files):
         a, b = bounds[i], bounds[i + 1]
         s = kp[a:b]
@@ -761,12 +797,12 @@ def _train(work, gt_path, n_train, hold_mod, mem, threads, seed, rounds, chunks,
     hold_sids = con.execute("SELECT sid FROM split WHERE g = 'hold'").df().sid.tolist()
     lab_hold = con.execute("SELECT sid, tid FROM gt WHERE sid IN (SELECT sid FROM split WHERE g = 'hold')").df()
     hb = grp == 2
-    cand = {"p1_min": CAND_P, "hold_blocked_per_ref": int(hb.sum()) / len(hold_sids),
-            "hold_final_per_ref": int((hb & kp).sum()) / len(hold_sids),
+    cand = {"p1_min": CAND_P, "export_scope": "input_to_first_scoring_model",
+            "hold_candidates_per_ref": int(hb.sum()) / len(hold_sids),
+            "hold_stage2_pairs_per_ref": int((hb & kp).sum()) / len(hold_sids),
             "blocked_link_recall": int(y[hb].sum()) / max(len(lab_hold), 1),
-            "final_link_recall": int(y[hb & kp].sum()) / max(len(lab_hold), 1)}
+            "stage2_link_recall": int(y[hb & kp].sum()) / max(len(lab_hold), 1)}
     lg(f"candidate filter: {cand}")
-    sid, tid, grp, y, p1, p2 = sid[kp], tid[kp], grp[kp], y[kp], p1[kp], p2[kp]
     check_scores(p1)
     check_scores(p2)
     tune_set = set(con.execute(f"""SELECT r.rid FROM rec r JOIN split s ON s.sid = r.rid
@@ -780,13 +816,16 @@ def _train(work, gt_path, n_train, hold_mod, mem, threads, seed, rounds, chunks,
     hold = grp == 2
     hk = pd.DataFrame({"sid": sid[hold], "tid": tid[hold], "p_stage1": p1[hold], "p_stage2": p2[hold]})
     lg(f"HOLDOUT stage2: threshold={result['threshold']} final macro F0.5={result['final_macro_f05']:.5f}")
-    recall_ceiling = cand["final_link_recall"]
+    recall_ceiling = cand["blocked_link_recall"]
+    devices = {name: "cpu" if isinstance(b, lgb.Booster) else b.attr("training_device") or model_device(b)
+               for name,b in (("A",m["A"]),("B",m["B"]),("stage2",m2))}
     metrics = {"holdout_macro_f05": res["stage2"]["final_macro_f05"], "threshold": res["stage2"]["threshold"],
                "params": {"n_train": n_train, "rounds": rounds, "leaves": leaves, "lr": lr, "hold_mod": hold_mod,
                           "chunks": chunks, "seed": seed, "weight": weight, "backend": backend,
-                          "gpu": bool(backend == "xgb" and gpu_available())},
+                          "gpu": any(d.startswith("cuda") for d in devices.values()),
+                          "devices": devices, "stage2_all": stage2_all},
                "references_fit": {"A": int(counts["A"]), "B": int(counts["B"]),
-                                  "stage2": int(sum(v for g, v in counts.items() if g != "hold"))},
+                                  "stage2": int(np.unique(sid[fit2]).size)},
                "candidate_filter": cand,
                "labels": label_stats, "stage2": res["stage2"],
                "evaluation": "One final evaluation; production scores/global ownership; competitor pool includes fitted references.",
@@ -850,17 +889,16 @@ def predict(work, split, out_dir, mem="20GB", threads=None, chunks=8, tmp=None, 
     try:
         keys, p1, p2 = _score_all(con, m1, m2, threads, chunks, tmp or scratch(work))
         blocked = con.execute("SELECT count(*) FROM c").fetchone()[0]
-        # The final candidate set = the filtered pairs the matcher scored; the writer checks exact coverage.
-        con.register("kept", keys[["sid", "tid"]])
-        con.execute("CREATE OR REPLACE TABLE c AS SELECT * FROM c SEMI JOIN kept USING (sid, tid)")
-        con.unregister("kept")
+        # Never trim c after first-stage scoring: it is the officially required candidate set.
         out.mkdir(parents=True, exist_ok=False)
         scores = out / "scores.parquet"
-        pd.DataFrame({"sid": keys.sid.values, "tid": keys.tid.values, "p1": p1, "p": p2}).to_parquet(scores, index=False)
+        pd.DataFrame({"sid": keys.sid.values, "tid": keys.tid.values, "p1": p1, "p": p2,
+                      "stage2_scored": p1 >= CAND_P}).to_parquet(scores, index=False)
         n_match, n_s1 = write_outputs(con, scores, thr, out)
         seal(out, "prediction_manifest.json", {"model": digest(model_path(work, model_dir) / "model_manifest.json"),
              "stage": verify_stage(work, split), "code": code_digest(), "threshold": thr,
-             "pairs": len(keys), "blocked_pairs": blocked, "candidate_filter_p1": CAND_P,
+             "pairs": len(keys), "blocked_pairs": blocked, "early_reject_p1": CAND_P,
+             "candidate_scope": "input_to_first_scoring_model",
              "references": n_s1, "matches": n_match},
              ["scores.parquet", "matching_results.tsv", "candidate_pairs.tsv"])
         print(f"[predict {split}] wrote {n_s1:,} rows and {n_match:,} links", flush=True)

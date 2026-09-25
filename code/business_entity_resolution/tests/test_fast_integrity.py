@@ -156,6 +156,9 @@ def test_fast_raw_to_model_to_validated_outputs(completed_pipeline):
     assert meta['inputs']['pairs'] > 120
     gt = pd.read_parquet(root/'pq/train_ground_truth.parquet')
     assert gt.matched_entity_ids.eq('').sum() == 12
+    from fast_er.prep import skeleton
+    prepared = pd.read_parquet(root/'work/train/norm_s2.parquet')
+    assert prepared.skel.tolist() == prepared.core.map(skeleton).tolist()
     from business_er.validation import validate_files
     result = validate_files(*(root/'data/test'/f'test_source{i}.tsv' for i in (1,2,3)),
         root/'out/matching_results.tsv', root/'out/candidate_pairs.tsv', root/'checks')
@@ -165,6 +168,9 @@ def test_fast_raw_to_model_to_validated_outputs(completed_pipeline):
     assert {'tune','final'} <= set(split.half)
     metrics = json.loads((root/'work/model/metrics.json').read_text())
     assert 'grid_final' not in metrics['stage2']
+    assert metrics['references_fit']['stage2'] <= 70
+    assert metrics['params']['stage2_all'] is False
+    assert set(metrics['params']['devices'].values()) == {'cpu'}
     model.predict(root/'work','test',root/'repeat',mem='512MB',threads=1,chunks=13)
     for name in ('matching_results.tsv','candidate_pairs.tsv'):
         assert (root/'out'/name).read_bytes() == (root/'repeat'/name).read_bytes()
@@ -186,14 +192,16 @@ def test_cached_training_scores_equal_full_refeaturization(completed_pipeline):
     assert not list((root/'work').glob('fe_train_*'))  # scratch removed
 
 
-def test_candidate_filter_exports_exactly_the_matcher_inputs(completed_pipeline, monkeypatch):
-    """A higher filter keeps fewer candidates; candidate_pairs.tsv == scored pairs, and matches are a subset."""
+def test_cascade_exports_first_model_inputs_even_when_later_rejected(completed_pipeline, monkeypatch):
+    """A higher early-rejection threshold must not shrink the official exported candidates."""
     root = completed_pipeline
     full = pd.read_parquet(root/'out/scores.parquet')
     monkeypatch.setattr(model, "CAND_P", float(full.p1.median()))
     model.predict(root/'work', 'test', root/'filtered', mem='512MB', threads=1, chunks=7)
     scores = pd.read_parquet(root/'filtered/scores.parquet')
-    assert 0 < len(scores) < len(full) and (scores.p1 >= model.CAND_P).all()
+    assert len(scores) == len(full)
+    assert (scores.p[scores.p1 < model.CAND_P] == 0).all()
+    assert (root/'filtered/candidate_pairs.tsv').read_bytes() == (root/'out/candidate_pairs.tsv').read_bytes()
     read = lambda n: pd.read_csv(root/'filtered'/n, sep='\t', dtype=str, keep_default_na=False)
     cand, match = read('candidate_pairs.tsv'), read('matching_results.tsv')
     pairs = {(s, t) for s, ids in zip(cand.source1_entity_id, cand.candidate_entity_ids) for t in ids.split(',') if ids}

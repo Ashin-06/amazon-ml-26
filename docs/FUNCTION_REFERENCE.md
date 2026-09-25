@@ -614,6 +614,52 @@ blocking_recall(split='train', work='work', gt_path='work/pq/train_ground_truth.
 
 Train-only: link recall and oracle macro F0.5 (empty prediction for singletons = 1.0).
 
+## fast_er/efficiency.py
+
+Read-only tuning diagnostics for candidate cost, recall and oracle macro F0.5.
+
+Policies use only blocking evidence before any model scoring. This module never
+changes an existing candidate file, selects a matcher threshold or reads final labels.
+
+### `profile`
+
+```python
+profile(con, labeled=True)
+```
+
+Summarize c against every refs row, including zero-candidate references.
+
+Tables: refs(sid,country), targets(country,n_targets), c(sid,tid),
+and, when labeled, gt(sid,tid). All candidate/truth keys must be unique.
+Only aggregate country counts are required for target-pool sizing.
+
+### `policy_condition`
+
+```python
+policy_condition(k, k_field, prefix='')
+```
+
+Validated label-free union of total/name/address blocking ranks.
+
+### `benchmark`
+
+```python
+benchmark(work, gt_path, output, sample=5000, mem='512MB', threads=1)
+```
+
+Profile natural saved candidates on fixed tuning references of a verified historical run.
+
+Historical source may differ: this is explicitly a retrieval diagnostic, never
+permission to reuse its files for changed-source training. Final references are excluded.
+
+### `main`
+
+```python
+main()
+```
+
+Run a bounded read-only tuning frontier against a completed, fingerprinted stage.
+
 ## fast_er/ensemble.py
 
 Verified equal-weight seed ensembles with complete-graph evaluation and immutable outputs.
@@ -759,7 +805,7 @@ Learn deterministic token mappings from audited non-hold labels only.
 apply_lexicon(work, split)
 ```
 
-Rewrite name/core of non-ASCII-named records in work/<split>/norm_s*.parquet (idempotent via marker).
+Rewrite learned names and persist post-lexicon skeletons in bounded 100k-row batches.
 
 ## fast_er/model.py
 
@@ -952,7 +998,7 @@ _xgb_train(P, make, n, rounds)
 ```
 
 Train on the GPU when usable; if the GPU runs out of memory, rebuild the matrix on the host and
-train on CPU. `make(gpu)` builds the quantized matrix (~1 byte per value; built directly in GPU memory
+train on CPU. `make(gpu)` builds the quantized matrix (built directly in GPU memory
 from CuPy blocks when gpu is True). No evaluation set (it only cost GPU memory).
 
 ### `_fit`
@@ -970,8 +1016,24 @@ _fit_parts(backend, P, loaders, y, w, names, rounds)
 ```
 
 _fit for training rows kept on disk: `loaders` return consecutive row blocks matching y / w.
-XGBoost streams the blocks into its quantized matrix (~1 byte per value), so every reference fits in
-memory; LightGBM (small runs and tests) concatenates them.
+QuantileDMatrix still holds the combined quantized data in memory: this is not external-memory
+training or a guarantee that full data fits. LightGBM concatenates the float matrices.
+
+### `model_device`
+
+```python
+model_device(booster)
+```
+
+Read the actual booster device, never infer GPU execution from hardware availability.
+
+### `is_memory_failure`
+
+```python
+is_memory_failure(error)
+```
+
+Recognize allocation failures without masking unrelated model or schema errors.
 
 ### `_pred`
 
@@ -979,7 +1041,7 @@ memory; LightGBM (small runs and tests) concatenates them.
 _pred(m, X, threads=None)
 ```
 
-Match probability for the rows of X, from either booster type.
+Predict with bounded GPU transfers; preserve CPU fallback for the remaining batches.
 
 ### `_names`
 
@@ -1053,8 +1115,7 @@ Compatibility entry point for the shared label-integrity gate.
 _score_all(con, models, m2, threads, chunks, tmp_parent)
 ```
 
-Score the complete graph using the production pipeline and run-owned disk caches.
-Returns only the pairs kept by the learned candidate filter (the matcher's inputs).
+Return every first-model input; early-rejected pairs have a cascade decision score of zero.
 
 ### `evaluate_threshold`
 
@@ -1075,7 +1136,7 @@ Resolve one model/ensemble subdirectory without allowing traversal or absolute p
 ### `train`
 
 ```python
-train(work, gt_path, n_train=300000, hold_mod=22, mem='20GB', threads=None, seed=26, rounds=600, chunks=8, leaves=127, lr=0.05, weight='none', backend='auto', model_dir='model')
+train(work, gt_path, n_train=10000, hold_mod=22, mem='4GB', threads=1, seed=26, rounds=600, chunks=8, leaves=127, lr=0.05, weight='none', backend='lgb', model_dir='model', stage2_all=False)
 ```
 
 Fit classifiers and stacker, then evaluate disjoint tune/final reference groups.
@@ -1084,20 +1145,21 @@ Stacker inputs use classifier-level cross-fitting. The learned lexicon uses
 non-hold references, so this is not full-pipeline cross-fitting. Every training
 candidate is featurized once; the stage-1 matrices are cached in a run-owned scratch
 directory (removed afterwards), streamed into the boosters and reused for the production-scoring
-evaluation pass. n_train above the number of non-holdout references trains on all of them.
+evaluation pass. Stage 2 uses the same bounded reference sample unless stage2_all is explicit.
+Complete-graph context/evaluation still scans all candidates and needs measured resources.
 
 ### `_train`
 
 ```python
-_train(work, gt_path, n_train, hold_mod, mem, threads, seed, rounds, chunks, leaves, lr, weight, backend, model_dir, own)
+_train(work, gt_path, n_train, hold_mod, mem, threads, seed, rounds, chunks, leaves, lr, weight, backend, model_dir, own, stage2_all=False)
 ```
 
 Body of train(); `own` is the scratch directory for cached stage-1 matrices.
 
 Every training candidate (all references: fit groups A/B, holdout, others) is featurized exactly once,
 one sid-slice at a time; matrices live on disk and boosters read them block by block. n_train sets the
-stage-1 references (A + B; above the non-holdout count means all); stage 2 always learns from every
-non-holdout reference. Pairs below the learned candidate filter (CAND_P) never reach stage 2.
+stage-1 references (A + B; above the non-holdout count means all). Stage 2 uses A/B by default;
+stage2_all explicitly expands fitting to all non-holdout references. Early rejection skips stage 2.
 
 ### `load_models`
 
