@@ -66,6 +66,11 @@ STATES = {
     "mharastr": "mh", "dilli": "dl", "uttr prdes": "up", "krnatk": "ka", "tmilnatu": "tn", "pscimbng": "wb",
     "gujrat": "gj", "telmgan": "tg", "hriyana": "hr", "rajsthan": "rj", "kerlm": "kl", "mdhy prdes": "mp",
     "amdhrprdes": "ap", "pmjab": "pb", "od'isa": "od",
+    # old/new city and state names the target generator swaps (co-occurring in true India links)
+    "keralam": "kl", "calcutta": "kolkata", "bengaluru": "bangalore", "bombay": "mumbai", "madras": "chennai",
+    "vizag": "visakhapatnam", "gurugram": "gurgaon", "poona": "pune", "cochin": "kochi", "calicut": "kozhikode",
+    "mangaluru": "mangalore", "baroda": "vadodara", "belagavi": "belgaum", "prayagraj": "allahabad",
+    "mysuru": "mysore", "trivandrum": "thiruvananthapuram",
 }
 STATE_RE = re.compile(r"\b(" + "|".join(sorted(map(re.escape, STATES), key=len, reverse=True)) + r")\b")
 # France (test-only): references give the region, targets often the departement. Both map to one region
@@ -94,6 +99,10 @@ ORDINALS = {w: f"{i}{'th' if 10 <= i % 100 <= 20 else {1: 'st', 2: 'nd', 3: 'rd'
                                    "twentieth"], 1)}
 ORDINALS.update({"thirtieth": "30th", "fortieth": "40th", "fiftieth": "50th"})
 NULLS = {"null", "none", "nan"}
+# Address words the target generator adds, drops or swaps around the same number ("door no 12" vs
+# "h no 12" vs "plot 12"; "unit 5"; "... township", "... cdp", "county", "region", "city"). Dropped from
+# addresses on both sides; the numbers themselves are kept.
+ADDR_DROP = {"door", "h", "hn", "no", "plot", "unit", "county", "township", "twp", "cdp", "region", "city"}
 
 
 def _tok(t):
@@ -116,7 +125,7 @@ def norm(text, states=False, france=False):
         text = STATE_RE.sub(lambda m: STATES[m.group(1)], text)
     out = []
     for t in map(_tok, NON_ALNUM.sub(" ", text).split()):
-        if states and t in NULLS:  # literal "null"/"none" noise inside addresses
+        if states and (t in NULLS or t in ADDR_DROP):  # "null" noise and swapped filler inside addresses
             continue
         if not out or out[-1] != t:  # "nature nature" -> "nature"
             out.append(t)

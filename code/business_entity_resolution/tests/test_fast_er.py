@@ -18,6 +18,8 @@ def test_norm_canonicalizes_noise():
     assert norm("6451 Old Church Way, Reynoldsburg, Ohio", states=True) == "6451 old church way reynoldsburg oh"
     assert norm("014889 Twentieth Ave, Nature Nature") == "14889 20th ave nature"
     assert norm("Cascade Ctr, DC, null", states=True) == "cascade ctr dc"
+    assert norm("Door No 12, MG Road, Bombay, Keralam", states=True) == norm("H.No 12, MG Rd, Mumbai, Kerala", states=True)
+    assert norm("Unit 5, 10 Oak St, Kent County", states=True) == "5 10 oak st kent"
     assert norm(None) == "" and norm("") == ""
     assert norm("अरिहंत") != ""  # native script is transliterated, not dropped
     assert core_of(norm("Taran It Pvt Ltd")) == "taran it"
