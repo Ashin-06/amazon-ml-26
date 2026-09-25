@@ -132,3 +132,39 @@ def test_skeleton_merges_transliterations_but_not_unrelated_names():
     assert skeleton("perfect") == skeleton("prphekt")
     assert skeleton("blue river") != skeleton("green valley")
     assert skeleton("12 main") .startswith("12")  # numbers kept verbatim
+
+
+def test_clean_name_removes_target_generator_noise():
+    assert clean_name("Uppal Global Private Limited (ID: 49107)") == "Uppal Global Private Limited"
+    assert clean_name("Ma Vidyalaya | www.mavidyala.com") == "Ma Vidyalaya"
+    assert clean_name("M/s People Cure Private Limited") == "People Cure Private Limited"
+    assert clean_name("Smt Lakshmi Traders") == "Lakshmi Traders"
+    assert clean_name("Arihant 5ervices 6roup hea1th c0rp") == "Arihant services group health corp"
+    assert clean_name("Tata lnc lndia") == "Tata inc india"
+    assert clean_name("1st Choice 24hr 7eleven B2B") == "1st Choice 24hr 7eleven B2B"  # genuine digits kept
+    assert clean_name("Novifaye formerly known as Tedyndyne Crown LLC") == "Tedyndyne Crown LLC"
+    assert clean_name("Synzephnex fka Tamar Beebe Limited") == "Tamar Beebe Limited"
+    assert clean_name("Dr") == "Dr"
+
+
+def test_domain_names_are_segmented_with_reference_vocabulary():
+    from fast_er import prep
+    vocab = frozenset({"regional", "creative", "towing", "vidyalaya", "badyne", "fou", "dai", "ton"})
+    assert prep.segment("regionalcreativetowing", vocab) == "regional creative towing"
+    assert prep.segment("hvidyalaya", vocab) == "h vidyalaya"
+    assert prep.segment("badyne", vocab) == "badyne"  # known word stays whole
+    assert prep.segment("foudaiton", vocab) == "foudaiton"  # only short pieces: kept
+    old = prep.VOCAB
+    try:
+        prep.VOCAB = vocab
+        assert prep.clean_name("REGIONALCREATIVETOWING.COM") == "regional creative towing"
+        assert prep.clean_name("-- regional-creativetowing.co.in") == "regional creative towing"
+    finally:
+        prep.VOCAB = old
+
+
+def test_house_number_delta_features():
+    from fast_er.model import _num_feats
+    f = _num_feats(["353 oak st", "1234 elm st", "9 pine rd"], ["355 oak st", "1334 elm st", "pine rd"])
+    assert f[0, 8] > 0 and f[0, 9] == 1.0 and f[1, 9] == 1.0  # 353/355 and 1234/1334: one digit differs
+    assert abs(f[1, 8] - np.log1p(100)) < 1e-5 and f[2, 8] == -1 and f[2, 9] == -1

@@ -786,6 +786,8 @@ _num_feats(sa, ta)
 ```
 
 Digit-token agreement; hn_* compare the first number (house/plot number): typo vs neighbour.
+hn_logdiff = log1p |a - b|, hn_sub1 = same length and exactly one digit differs (typo-like, while
+decoys shift the number by a small amount: 353 vs 355).
 
 ### `features`
 
@@ -1036,7 +1038,7 @@ Resolve one model/ensemble subdirectory without allowing traversal or absolute p
 ### `train`
 
 ```python
-train(work, gt_path, n_train=300000, hold_mod=22, mem='20GB', threads=None, seed=26, rounds=600, chunks=8, leaves=127, lr=0.05, weight='none', backend='lgb', model_dir='model')
+train(work, gt_path, n_train=300000, hold_mod=22, mem='20GB', threads=None, seed=26, rounds=600, chunks=8, leaves=127, lr=0.05, weight='none', backend='auto', model_dir='model')
 ```
 
 Fit classifiers and stacker, then evaluate disjoint tune/final reference groups.
@@ -1099,7 +1101,7 @@ Canonicalize zero padding, abbreviations and ordinal tokens.
 ### `norm`
 
 ```python
-norm(text, states=False)
+norm(text, states=False, france=False)
 ```
 
 Lowercase, transliterate, strip punctuation, canonicalize tokens, drop repeated tokens.
@@ -1112,13 +1114,49 @@ raw_joined(text)
 
 Transliterated, lowercase, alphanumerics only, no spaces, no abbreviation mapping.
 
+### `_ocr`
+
+```python
+_ocr(m)
+```
+
+Map OCR digits 0/1/5/6/8 in a word to o/l/s/g/b unless the word looks genuinely numeric.
+
+### `segment`
+
+```python
+segment(stem, vocab=None)
+```
+
+Split a glued domain stem into reference-name words, single letters as initials
+("regionalcreativetowing" -> "regional creative towing", "hvidyalaya" -> "h vidyalaya").
+Longer words are preferred (score = sum of squared lengths); the stem is kept unchanged when it is a
+known word itself or cannot be covered mostly (>= 60%) by words of 4+ letters.
+
 ### `clean_name`
 
 ```python
 clean_name(text)
 ```
 
-Drop appended phone numbers; for 'Brand DBA Real Name' keep the part after the alias marker.
+Drop appended phone numbers; for 'Brand DBA Real Name' keep the part after the alias marker;
+remove generator noise (ID tags, URL tails, honorific prefixes, OCR digits) and split domain names.
+
+### `name_vocab`
+
+```python
+name_vocab(path)
+```
+
+Lowercase transliterated words (2+ chars) of every reference name in one raw parquet.
+
+### `_init_worker`
+
+```python
+_init_worker(vocab)
+```
+
+Pool initializer: give each worker the reference-name vocabulary used by segment().
 
 ### `_chunk`
 
@@ -1127,6 +1165,16 @@ _chunk(cols)
 ```
 
 Normalize one batch while preserving a separate original-name view.
+
+### `skeleton`
+
+```python
+skeleton(text)
+```
+
+Phonetic consonant skeleton of a normalized name: similar sounds merged, vowels dropped, repeats
+collapsed. Transliteration variants the lexicon has not learned still line up
+("lakshmi"/"lksmi" -> "lksm", "perfect"/"prphekt" -> "prfkt").
 
 ### `core_of`
 

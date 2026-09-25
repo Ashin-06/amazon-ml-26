@@ -65,7 +65,8 @@ BASE = ["s", "sn", "sa", "nk", "r_s", "r_n", "r_a", "n_c", "s_rel", "s_gap", "t_
 FEATS = BASE + ["n_ratio", "n_tsort", "n_tset", "n_partial", "n_jw", "c_ratio", "c_tset", "c_nospace",
                 "c_exact", "a_ratio", "a_tsort", "a_tset", "a_partial", "t_addr_empty", "len_n_s", "len_n_t",
                 "len_a_s", "len_a_t", "num_jac", "num_common", "num_conflict", "num_first_eq", "s_num_cnt",
-                "t_num_cnt", "hn_ratio", "hn_rel", "raw_ratio", "raw_partial", "sup_core", "sup_addr", "skel_ratio"]
+                "t_num_cnt", "hn_ratio", "hn_rel", "raw_ratio", "raw_partial", "sup_core", "sup_addr", "skel_ratio",
+                "hn_logdiff", "hn_sub1"]
 CTX = ["p1", "p1_rank", "p1_max", "p1_sum", "p1_n05", "p1_rel", "p1_trank", "p1_tother", "p1_tdiff", "p1_tn05",
        "p1_srank", "p1_sn05", "p1_smax", "anc_name", "anc_core", "anc_addr", "anc_n"]
 FEATS2 = FEATS + CTX
@@ -90,8 +91,10 @@ FROM p1tab JOIN rec r ON r.rid = p1tab.tid
 
 
 def _num_feats(sa, ta):
-    """Digit-token agreement; hn_* compare the first number (house/plot number): typo vs neighbour."""
-    out = np.zeros((len(sa), 8), np.float32)
+    """Digit-token agreement; hn_* compare the first number (house/plot number): typo vs neighbour.
+    hn_logdiff = log1p |a - b|, hn_sub1 = same length and exactly one digit differs (typo-like, while
+    decoys shift the number by a small amount: 353 vs 355)."""
+    out = np.zeros((len(sa), 10), np.float32)
     for i, (x, y) in enumerate(zip(sa, ta)):
         a, b = DIGITS.findall(x), DIGITS.findall(y)
         sa_, sb_ = set(a), set(b)
@@ -99,7 +102,10 @@ def _num_feats(sa, ta):
         hn = (fuzz.ratio(a[0], b[0]) / 100, abs(int(a[0][:9]) - int(b[0][:9])) / max(int(a[0][:9]), int(b[0][:9]), 1))             if a and b else (-1, -1)
         out[i] = (inter / len(sa_ | sb_) if sa_ and sb_ else -1, inter,
                   float(bool(sa_) and bool(sb_) and not inter),
-                  float(bool(a) and bool(b) and a[0] == b[0]), len(a), len(b), *hn)
+                  float(bool(a) and bool(b) and a[0] == b[0]), len(a), len(b), *hn,
+                  *((np.log1p(abs(int(a[0][:9]) - int(b[0][:9]))),
+                     float(len(a[0]) == len(b[0]) and sum(p != q for p, q in zip(a[0], b[0])) == 1))
+                    if a and b else (-1, -1)))
     return out
 
 
@@ -133,7 +139,7 @@ def features(df, threads=1):
         cols[k] = np.fromiter(map(len, v), np.float32, len(v))
     nf = _num_feats(sa, ta)
     for j, k in enumerate(["num_jac", "num_common", "num_conflict", "num_first_eq", "s_num_cnt", "t_num_cnt",
-                           "hn_ratio", "hn_rel"]):
+                           "hn_ratio", "hn_rel", "hn_logdiff", "hn_sub1"]):
         cols[k] = nf[:, j]
     return np.column_stack([cols[c] for c in FEATS])
 

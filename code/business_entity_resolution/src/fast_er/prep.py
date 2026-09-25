@@ -80,7 +80,9 @@ FR_COMPONENT = re.compile(r"[\s\-]+")
 # Dropped from the 'core' name view (legal forms, generic filler).
 LEGAL = {"pvt", "ltd", "inc", "llc", "corp", "co", "lp", "llp", "plc", "pc", "pllc", "the", "&", "of", "a", "k",
          "com", "www", "in", "net", "org", "sa", "sas", "sarl", "eurl", "sci", "public", "india", "group",
-         "dba", "aka", "d", "b", "l", "p", "c", "s", "de", "du", "des", "la", "le", "les", "france"}
+         "dba", "aka", "d", "b", "l", "p", "c", "s", "de", "du", "des", "la", "le", "les", "france",
+         # generic words the target generator appends/drops ("X [Services]", "X Inc Center", "X Partners")
+         "svc", "ctr", "partners"}
 
 
 ORDINALS = {w: f"{i}{'th' if 10 <= i % 100 <= 20 else {1: 'st', 2: 'nd', 3: 'rd'}.get(i % 10, 'th')}"
@@ -127,14 +129,64 @@ def raw_joined(text):
 
 
 PHONE = re.compile(r"[\s\-]*\+?\d[\d\- ]{6,}\d")
-ALIAS = re.compile(r"(?i)(?<![A-Za-z0-9])(?:a/k/a|aka|d/b/a|dba|trading as|t/a|also known as|formerly|doing business as|operating as)(?=\W)[:\s]*")
+ALIAS = re.compile(r"(?i)(?<![A-Za-z0-9])(?:a/k/a|aka|f/k/a|fka|d/b/a|dba|trading as|t/a|also known as|formerly known as|formerly|doing business as|operating as)(?=\W)[:\s]*")
 
 
 FR_ALIAS = re.compile(r"(?i)(?<![A-Za-z0-9])(?:n[ée]e|anciennement)(?=\W)[:\s]*")
 
 
+# Target-name noise seen in the supplied data (reference names almost never carry it):
+# "(ID: 49107)" tags, "| www.x.com" tails, "M/s"/"Shri"/"Smt"/"Mr"/"Dr" prefixes, OCR digits inside
+# words ("5ervices", "6lobal", "hea1th", "c0rp") and "ln" for "in" ("lnc", "lndia"), and names
+# replaced by a glued domain ("regionalcreativetowing.com").
+ID_TAG = re.compile(r"(?i)\s*[(\[]?\bid\b\s*[:#]?\s*\d+\s*[)\]]?\s*$")
+URL_TAIL = re.compile(r"(?i)\s*\|\s*(?:https?://)?(?:www\.)?[\w-]+\.(?:com|net|org|co\.in|in|co)\S*\s*$")
+HONORIFIC = re.compile(r"(?i)^\W*(?:m/s|sri|shri|smt|mrs|mr|dr)\b\.?\s+(?=\S)")
+OCR_WORD = re.compile(r"\b(?=[A-Za-z0-9]*[A-Za-z])(?=[A-Za-z0-9]*[01568])[A-Za-z0-9]+\b")
+OCR_MAP = str.maketrans("01568", "olsgb")
+OCR_KEEP = re.compile(r"[2-479]|^\d+(?:st|nd|rd|th)$", re.I)  # other digits / ordinals are genuine
+LN_WORD = re.compile(r"\b[lL](?=[nN][A-Za-z])")
+DOMAIN = re.compile(r"(?i)^\W*(?:https?://)?(?:www\.)?([a-z0-9-]+)\.(?:com|net|org|co\.in|in|co)\W*$")
+VOCAB = frozenset()  # lowercase words of the split's reference names; set per worker by prepare()
+
+
+def _ocr(m):
+    """Map OCR digits 0/1/5/6/8 in a word to o/l/s/g/b unless the word looks genuinely numeric."""
+    w = m.group()
+    digits = sum(c.isdigit() for c in w)
+    return w if OCR_KEEP.search(w) or digits > len(w) - digits else w.translate(OCR_MAP)
+
+
+def segment(stem, vocab=None):
+    """Split a glued domain stem into reference-name words, single letters as initials
+    ("regionalcreativetowing" -> "regional creative towing", "hvidyalaya" -> "h vidyalaya").
+    Longer words are preferred (score = sum of squared lengths); the stem is kept unchanged when it is a
+    known word itself or cannot be covered mostly (>= 60%) by words of 4+ letters."""
+    vocab = VOCAB if vocab is None else vocab
+    n = len(stem)
+    if not vocab or n < 5 or n > 60 or stem in vocab:
+        return stem
+    best = [None] * (n + 1)
+    best[0] = (0, ())
+    for i in range(n):
+        if best[i] is None:
+            continue
+        for j in range(i + 1, min(n, i + 30) + 1):
+            w = stem[i:j]
+            if j - i > 1 and w not in vocab:
+                continue
+            cand = (best[i][0] + (j - i) ** 2 * (j - i > 1), best[i][1] + (w,))
+            if best[j] is None or cand[0] > best[j][0]:
+                best[j] = cand
+    parts = best[n][1] if best[n] else ()
+    if len(parts) < 2 or sum(len(p) == 1 for p in parts) > 2 or sum(len(p) for p in parts if len(p) >= 4) < 0.6 * n:
+        return stem
+    return " ".join(parts)
+
+
 def clean_name(text):
-    """Drop appended phone numbers; for 'Brand DBA Real Name' keep the part after the alias marker."""
+    """Drop appended phone numbers; for 'Brand DBA Real Name' keep the part after the alias marker;
+    remove generator noise (ID tags, URL tails, honorific prefixes, OCR digits) and split domain names."""
     if not isinstance(text, str) or not text:
         return text
     original = text
@@ -143,9 +195,31 @@ def clean_name(text):
         return original
     parts = ALIAS.split(text, maxsplit=1)
     if len(parts) == 2 and parts[1].strip():
-        return parts[1]
-    parts = FR_ALIAS.split(text, maxsplit=1)
-    return parts[1] if len(parts) == 2 and parts[0].strip() and parts[1].strip() else text
+        text = parts[1]
+    else:
+        parts = FR_ALIAS.split(text, maxsplit=1)
+        if len(parts) == 2 and parts[0].strip() and parts[1].strip():
+            text = parts[1]
+    text = HONORIFIC.sub("", URL_TAIL.sub("", ID_TAG.sub("", text))).strip() or text
+    text = LN_WORD.sub("i", OCR_WORD.sub(_ocr, text))
+    m = DOMAIN.match(text)
+    return " ".join(segment(p) for p in m.group(1).lower().split("-") if p) if m else text
+
+
+def name_vocab(path):
+    """Lowercase transliterated words (2+ chars) of every reference name in one raw parquet."""
+    vocab = set()
+    for b in pq.ParquetFile(path).iter_batches(batch_size=200_000, columns=["business_name"]):
+        for x in b.column("business_name").to_pylist():
+            if isinstance(x, str) and x:
+                vocab.update(w for w in NON_ALNUM.split((x if x.isascii() else anyascii(x)).lower()) if len(w) >= 2)
+    return frozenset(vocab)
+
+
+def _init_worker(vocab):
+    """Pool initializer: give each worker the reference-name vocabulary used by segment()."""
+    global VOCAB
+    VOCAB = vocab
 
 
 def _chunk(cols):
@@ -194,7 +268,9 @@ def prepare(split, pq_dir="work/pq", out_dir="work", workers=8):
     out = Path(out_dir) / split
     out.mkdir(parents=True, exist_ok=False)
     rid = 0
-    with Pool(workers) as pool:
+    vocab = name_vocab(f"{pq_dir}/{split}_source1.parquet")  # unlabeled input text of this split only
+    print(f"{split}: reference-name vocabulary {len(vocab):,} words", flush=True)
+    with Pool(workers, initializer=_init_worker, initargs=(vocab,)) as pool:
         for src in (1, 2, 3):
             path = out / f"norm_s{src}.parquet"
             pf = pq.ParquetFile(f"{pq_dir}/{split}_source{src}.parquet")
