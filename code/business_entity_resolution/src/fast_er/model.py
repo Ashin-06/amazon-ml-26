@@ -27,7 +27,7 @@ import lightgbm as lgb
 import numpy as np
 import pandas as pd
 from rapidfuzz import fuzz
-from rapidfuzz.distance import JaroWinkler
+from rapidfuzz.distance import JaroWinkler, Postfix, Prefix
 from rapidfuzz.process import cpdist
 
 from .integrity import code_digest, digest, environment, files_digest, seal, verify, verify_stage
@@ -65,7 +65,7 @@ FEATS = BASE + ["n_ratio", "n_tsort", "n_tset", "n_partial", "n_jw", "c_ratio", 
                 "c_exact", "a_ratio", "a_tsort", "a_tset", "a_partial", "t_addr_empty", "len_n_s", "len_n_t",
                 "len_a_s", "len_a_t", "num_jac", "num_common", "num_conflict", "num_first_eq", "s_num_cnt",
                 "t_num_cnt", "hn_ratio", "hn_rel", "raw_ratio", "raw_partial", "sup_core", "sup_addr", "skel_ratio",
-                "hn_logdiff", "hn_sub1"]
+                "hn_logdiff", "hn_sub1", "ft_lev", "ft_len", "ft_pre", "ft_suf", "hn_in_t", "hn_t_in_s"]
 CTX = ["p1", "p1_rank", "p1_max", "p1_sum", "p1_n05", "p1_rel", "p1_trank", "p1_tother", "p1_tdiff", "p1_tn05",
        "p1_srank", "p1_sn05", "p1_smax", "anc_name", "anc_core", "anc_addr", "anc_n"]
 FEATS2 = FEATS + CTX
@@ -151,12 +151,18 @@ def features(df, threads=1):
     cols["hn_rel"] = np.where(has, diff / np.maximum(np.maximum(sv, tv), 1), -1).astype(np.float32)
     cols["hn_logdiff"] = np.where(has, np.log1p(diff), -1).astype(np.float32)
     cols["hn_sub1"] = np.where(has, df["hn_one"].to_numpy(bool), -1).astype(np.float32)
+    for k in ("ft_lev", "ft_len", "hn_in_t", "hn_t_in_s"):
+        cols[k] = df[k].to_numpy(np.float32)
+    sf, tf, fl = df["s_ft"].tolist(), df["t_ft"].tolist(), np.maximum(cols["ft_len"], 1)
+    cols["ft_pre"] = d(sf, tf, Prefix.similarity) / fl  # shared start of the closest token (share of the word)
+    cols["ft_suf"] = d(sf, tf, Postfix.similarity) / fl  # shared ending
     return np.column_stack([cols[c] for c in FEATS])
 
 
 def _pairs(con, where):
     """Candidate rows (with group features) joined to both records' normalized text."""
     return con.execute(f"""
+      SELECT * EXCLUDE (ft_best), ft_best.d::FLOAT AS ft_lev, coalesce(ft_best.t, '') AS t_ft FROM (
         SELECT c.*, a.name AS sname, a.core AS scor, a.addr AS saddr, a.rawn AS srawn, a.skel AS sskel,
                b.name AS tname, b.core AS tcore, b.addr AS taddr, b.src AS tsrc, b.rawn AS trawn, b.skel AS tskel,
                a.fc_t AS s_fct, a.fc_s AS s_fcs, a.fa_t AS s_fat,
@@ -173,9 +179,18 @@ def _pairs(con, where):
                len(a.nums)::FLOAT AS s_num_cnt, len(b.nums)::FLOAT AS t_num_cnt,
                coalesce(a.nums[1], '') AS s_hn, coalesce(b.nums[1], '') AS t_hn,
                TRY_CAST(left(a.nums[1], 9) AS DOUBLE) AS s_hv, TRY_CAST(left(b.nums[1], 9) AS DOUBLE) AS t_hv,
-               coalesce(length(a.nums[1]) = length(b.nums[1]) AND levenshtein(a.nums[1], b.nums[1]) = 1, false) AS hn_one
-        FROM c JOIN rec a ON a.rid = c.sid JOIN rec b ON b.rid = c.tid WHERE {where}
-        ORDER BY c.sid, c.tid""").df()
+               coalesce(length(a.nums[1]) = length(b.nums[1]) AND levenshtein(a.nums[1], b.nums[1]) = 1, false) AS hn_one,
+               -- targets often get an extra number prepended ("#27 c/o ..."): is each side's first number
+               -- anywhere in the other address? (-1 when either side has no number)
+               (CASE WHEN len(a.nums) = 0 OR len(b.nums) = 0 THEN -1 ELSE list_contains(b.nums, a.nums[1])::INT END)::FLOAT AS hn_in_t,
+               (CASE WHEN len(a.nums) = 0 OR len(b.nums) = 0 THEN -1 ELSE list_contains(a.nums, b.nums[1])::INT END)::FLOAT AS hn_t_in_s,
+               -- the reference's first core token and its closest target token (decoys keep the start of the
+               -- distinctive word and change its ending; typos are scattered single edits)
+               split_part(a.core, ' ', 1) AS s_ft, length(split_part(a.core, ' ', 1))::FLOAT AS ft_len,
+               list_min(list_transform(string_split(b.core, ' '),
+                        x -> struct_pack(d := levenshtein(split_part(a.core, ' ', 1), x), t := x))) AS ft_best
+        FROM c JOIN rec a ON a.rid = c.sid JOIN rec b ON b.rid = c.tid WHERE {where})
+      ORDER BY sid, tid""").df()
 
 
 def lit(value):
