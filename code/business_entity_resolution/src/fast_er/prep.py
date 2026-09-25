@@ -82,6 +82,7 @@ NULLS = {"null", "none", "nan"}
 
 
 def _tok(t):
+    """Canonicalize one token: strip zero-padding from numbers, map abbreviations and ordinals."""
     if t.isdigit():
         return t.lstrip("0") or "0"  # "014889" == "14889" (zero-padding noise)
     return TOKEN_MAP.get(t) or ORDINALS.get(t, t)
@@ -132,6 +133,7 @@ def clean_name(text):
 
 
 def _chunk(cols):
+    """Normalize one batch (worker process): name, country, core name, address, non-ASCII flag, raw name."""
     ids, names, addrs, countries = cols
     name = [norm(clean_name(x)) for x in names]
     return (ids, [norm(x) for x in countries], name, [core_of(n) for n in name],

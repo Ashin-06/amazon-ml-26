@@ -17,6 +17,7 @@ problems = []
 
 
 def fail(msg):
+    """Record and print one failed check."""
     problems.append(msg)
     print("  FAIL:", msg)
 

@@ -23,6 +23,7 @@ CODE = ("prep.py", "lexicon.py", "block.py")
 
 
 def provenance(a):
+    """Code hashes + settings that determine this stage's outputs (compared before reusing them)."""
     here = Path(__file__).resolve().parent
     return {"code_sha256": {f: hashlib.sha256((here / f).read_bytes()).hexdigest() for f in CODE},
             "settings": {k: getattr(a, k) for k in ("cap", "cap_whole", "k", "k_field", "hold_mod")}}

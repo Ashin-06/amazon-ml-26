@@ -20,6 +20,13 @@ from .prep import core_of
 
 
 def build_lexicon(work, gt_path, hold_mod=22, min_count=3, min_share=0.5, split="train"):
+    """Learn transliteration aliases from labelled train pairs (hold S1s excluded).
+
+    For every positive pair whose target name was non-ASCII and has as many tokens as the S1 name,
+    tokens are aligned by position; a mapping translit->english is kept when it was seen at least
+    `min_count` times and in at least `min_share` of that token's aligned occurrences.
+    Writes WORK/lexicon.json and returns the dict.
+    """
     w = Path(work) / split
     con = duckdb.connect()
     con.execute(f"CREATE VIEW rec AS SELECT * FROM read_parquet({lit(w / 'norm_s*.parquet')})")

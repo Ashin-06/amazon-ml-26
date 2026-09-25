@@ -58,6 +58,13 @@ SELECT rid, src, te, 1::TINYINT, hash(country || '|a|' || k) FROM (
 
 
 def block(split, work="work", cap=300, k=25, k_field=10, chunks=8, threads=None, mem="20GB", cap_whole=1000):
+    """Generate candidate pairs for every S1 of a split and write work/<split>/cands.parquet.
+
+    Hashed name / whole-name / name x address-word / address keys are built for all records;
+    target keys held by more than `cap` targets (`cap_whole` for whole names) are dropped; each
+    S1 collects idf-weighted overlap scores (total, name, address) with every target sharing a key,
+    and keeps top-`k` by total plus top-`k_field` by name and by address. Chunks are resumable.
+    """
     out = Path(work) / split / "cands.parquet"
     if out.exists():
         return out
