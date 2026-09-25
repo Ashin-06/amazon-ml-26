@@ -5,7 +5,7 @@ from pathlib import Path
 import duckdb
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from fast_er.integrity import code_digest, environment, files_digest, seal
-from fast_er.model import lit
+from fast_er.db import lit
 
 
 def convert(data, out):

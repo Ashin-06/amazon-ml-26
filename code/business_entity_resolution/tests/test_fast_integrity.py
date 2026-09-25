@@ -396,3 +396,20 @@ def test_unmanifested_normalized_file_cannot_change_prediction(completed_pipelin
         assert (root/"extra_file_check/matching_results.tsv").read_bytes()==(root/"out/matching_results.tsv").read_bytes()
     finally:
         extra.unlink()
+
+
+def test_stage1_fingerprint_covers_exactly_the_code_stage1_runs():
+    """Stage-1 outputs are bound to the modules candidate generation executes; none of them may import the
+    matcher (model.py), so matcher changes cannot silently alter candidates without a rebuild."""
+    import ast
+    from fast_er import integrity
+    src = Path(integrity.__file__).parent
+    for name in integrity.STAGE1_CODE:
+        tree = ast.parse((src / name).read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            mods = [node.module or ""] if isinstance(node, ast.ImportFrom) else \
+                   [a.name for a in node.names] if isinstance(node, ast.Import) else []
+            local = [m.split(".")[-1] for m in mods if m.startswith("fast_er") or (isinstance(node, ast.ImportFrom) and node.level)]
+            assert all(m + ".py" in integrity.STAGE1_CODE or m in ("", "fast_er") for m in local), (name, mods)
+    assert integrity.code_digest(integrity.STAGE1_CODE) != integrity.code_digest()
+    assert "model.py" not in integrity.STAGE1_CODE and "run_stage1.py" in integrity.STAGE1_CODE

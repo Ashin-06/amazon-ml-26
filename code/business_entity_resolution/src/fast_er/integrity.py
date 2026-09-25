@@ -29,9 +29,15 @@ def files_digest(paths):
     return result
 
 
-def code_digest():
-    """Fingerprint every fast-pipeline module, including its drivers and integrity rules."""
-    return files_digest(sorted(Path(__file__).parent.glob("*.py")))
+# Modules that candidate generation (stage 1) executes; its outputs are bound to exactly these.
+STAGE1_CODE = ("__init__.py", "block.py", "db.py", "integrity.py", "lexicon.py", "prep.py", "run_stage1.py",
+               "validation.py")
+
+
+def code_digest(names=None):
+    """Fingerprint every fast-pipeline module (default), or only the named ones (stage-1 outputs)."""
+    here = Path(__file__).parent
+    return files_digest(sorted(here.glob("*.py")) if names is None else [here / n for n in names])
 
 
 def environment():
@@ -85,7 +91,7 @@ def stage_inputs(pq_dir, split, gt, settings, lexicon=None):
     consumed = files_digest(paths)
     if any(converted["outputs"].get(name) != value for name,value in consumed.items()):
         raise ValueError("Stage inputs differ from verified converted inputs")
-    return {"conversion": converted, "code": code_digest(), "environment": environment(), "split": split,
+    return {"conversion": converted, "code": code_digest(STAGE1_CODE), "environment": environment(), "split": split,
             "split_version": SPLIT_VERSION, "files": consumed, "settings": settings,
             "lexicon": digest(lexicon) if lexicon else None}
 
@@ -95,7 +101,7 @@ def verify_stage(work, split):
     work = Path(work)
     meta = verify(work / split, "stage1_meta.json")
     recorded = meta["inputs"]
-    if recorded.get("code") != code_digest() or recorded.get("environment") != environment():
+    if recorded.get("code") != code_digest(STAGE1_CODE) or recorded.get("environment") != environment():
         raise ValueError("Stage code/environment changed; rebuild in a fresh WORK directory")
     if recorded.get("lexicon") != digest(work / "lexicon.json"):
         raise ValueError("Lexicon fingerprint mismatch")
