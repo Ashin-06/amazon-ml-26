@@ -206,3 +206,14 @@ def test_sql_pair_features_match_python_definitions():
     assert col("ft_lev")[by[5]] == 4 and col("ft_pre")[by[5]] == 0  # acme vs x
     assert col("hn_in_t")[by[4]] == 1 and col("hn_t_in_s")[by[4]] == 0  # 353 in [0353, 353]; 0353 not in [353, 60601]
     assert col("hn_in_t")[by[3]] == -1  # empty target address
+
+
+
+def test_candidate_slices_cover_every_reference_once():
+    from fast_er import model
+    con = duckdb.connect()
+    con.execute("CREATE TABLE c AS SELECT (i * 7919) % 1000 AS sid, i AS tid FROM range(5000) t(i) ORDER BY sid")
+    seen = []
+    for k in range(7):
+        seen += con.execute(f"SELECT sid FROM c WHERE {model._slice(con, 7, k)}").df().sid.tolist()
+    assert sorted(seen) == sorted(con.execute("SELECT sid FROM c").df().sid.tolist())

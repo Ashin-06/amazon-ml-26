@@ -59,6 +59,7 @@ SELECT *,
   rank() OVER (PARTITION BY tid ORDER BY s DESC) AS t_rank,
   s / max(s) OVER (PARTITION BY tid) AS t_rel
 FROM read_parquet({cands})
+ORDER BY sid
 """
 
 BASE = ["s", "sn", "sa", "nk", "r_s", "r_n", "r_a", "n_c", "s_rel", "s_gap", "t_nc", "t_rank", "t_rel",
@@ -159,6 +160,16 @@ def features(df, threads=1):
     cols["ft_pre"] = d(sf, tf, Prefix.similarity) / fl  # shared start of the closest token (share of the word)
     cols["ft_suf"] = d(sf, tf, Postfix.similarity) / fl  # shared ending
     return np.column_stack([cols[c] for c in FEATS])
+
+
+def _slice(con, chunks, k, col="c.sid"):
+    """Chunk k of `chunks` as a contiguous reference-id range. The candidate table is stored sorted by sid, so a
+    range lets DuckDB skip every other block (a modulo filter rescans the whole, possibly spilled, table)."""
+    if chunks == 1:
+        return "TRUE"
+    n = con.execute("SELECT coalesce(max(sid), -1) + 1 FROM c").fetchone()[0]
+    step = -(-max(n, 1) // chunks)
+    return f"({col} >= {k * step} AND {col} < {(k + 1) * step})"
 
 
 def _pairs(con, where):
@@ -550,7 +561,7 @@ def _predict_stage1(con, models, where, threads, chunks, tmp=None, tag=""):
     If tmp is given, stage-1 matrices are cached there as .npy for stage 2."""
     keys, p1 = [], []
     for k in range(chunks):
-        df = _pairs(con, f"({where}) AND c.sid % {chunks} = {k}")
+        df = _pairs(con, f"({where}) AND {_slice(con, chunks, k)}")
         if not len(df):
             continue
         X = features(df, threads)
@@ -701,7 +712,7 @@ def _train(work, gt_path, n_train, hold_mod, mem, threads, seed, rounds, chunks,
         raise ValueError("stage1_neg_keep must be in (0, 1] and stage1_hard_rank a nonnegative int")
     sids, tids, grps, ys, files, rss = [], [], [], [], [], []
     for k in range(chunks):  # one sid-slice of text rows in memory at a time
-        df = _pairs(con, f"c.sid % {chunks} = {k}")
+        df = _pairs(con, _slice(con, chunks, k))
         if not len(df):
             continue
         path = own / f"x{k}.npy"
@@ -709,7 +720,7 @@ def _train(work, gt_path, n_train, hold_mod, mem, threads, seed, rounds, chunks,
         kk = df[["sid", "tid"]].reset_index(drop=True)
         rss.append(np.minimum(df["r_s"].to_numpy(np.float64), 32767).astype(np.int16))  # blocking-score rank
         del df
-        lab = con.execute(f"SELECT sid, tid, 1::TINYINT AS y FROM gt WHERE sid % {chunks} = {k}").df()
+        lab = con.execute(f"SELECT sid, tid, 1::TINYINT AS y FROM gt WHERE {_slice(con, chunks, k, 'sid')}").df()
         sids.append(kk.sid.to_numpy(np.int32)); tids.append(kk.tid.to_numpy(np.int32))
         grps.append(kk.sid.map(group_of).to_numpy(np.int8))
         ys.append(kk.merge(lab, on=["sid", "tid"], how="left").y.fillna(0).to_numpy(np.int8))

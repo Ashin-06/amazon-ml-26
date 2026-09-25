@@ -879,6 +879,15 @@ features(df, threads=1)
 
 Stage-1 feature matrix (float32, column order FEATS) for joined candidate rows.
 
+### `_slice`
+
+```python
+_slice(con, chunks, k, col='c.sid')
+```
+
+Chunk k of `chunks` as a contiguous reference-id range. The candidate table is stored sorted by sid, so a
+range lets DuckDB skip every other block (a modulo filter rescans the whole, possibly spilled, table).
+
 ### `_pairs`
 
 ```python
