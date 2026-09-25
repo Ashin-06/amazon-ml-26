@@ -187,12 +187,18 @@ def _connect(work, split, mem, threads):
     if "rawn" not in [r[0] for r in con.execute("DESCRIBE rec").fetchall()]:
         raise ValueError("Prepared data lacks raw-name features; rebuild")
     # Phonetic skeleton of the (post-lexicon) core name, computed once per record.
-    sk = con.execute("SELECT rid, core FROM rec").df()
-    sk["skel"] = [skeleton(x) for x in sk.core.tolist()]
-    con.register("skdf", sk[["rid", "skel"]])
-    con.execute("CREATE OR REPLACE TABLE rec AS SELECT r.*, k.skel FROM rec r JOIN skdf k USING (rid)")
-    con.unregister("skdf")
-    del sk
+    con.execute("CREATE OR REPLACE TABLE skel (rid INTEGER, skel VARCHAR)")
+    for k in range(16):  # bounded batches: at most ~1/16 of the records in Python at a time
+        sk = con.execute(f"SELECT rid, core FROM rec WHERE rid % 16 = {k}").df()
+        sk["skel"] = [skeleton(x) for x in sk.core.tolist()]
+        con.register("skdf", sk[["rid", "skel"]])
+        con.execute("INSERT INTO skel SELECT rid, skel FROM skdf")
+        con.unregister("skdf")
+        del sk
+    con.execute("CREATE OR REPLACE TABLE rec AS SELECT r.*, k.skel FROM rec r JOIN skel k USING (rid)")
+    if con.execute("SELECT count(*) FROM rec WHERE skel IS NULL").fetchone()[0]:
+        raise ValueError("skeleton missing for some records")
+    con.execute("DROP TABLE skel")
     con.execute(GROUP_SQL.format(cands=lit(w / "cands.parquet")))
     validate_pairs(con, "c")
     return con

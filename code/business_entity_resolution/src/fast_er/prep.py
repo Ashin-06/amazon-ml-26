@@ -99,7 +99,7 @@ def _tok(t):
     return TOKEN_MAP.get(t) or ORDINALS.get(t, t)
 
 
-def norm(text, states=False):
+def norm(text, states=False, france=False):
     """Lowercase, transliterate, strip punctuation, canonicalize tokens, drop repeated tokens."""
     if not isinstance(text, str) or not text:
         return ""
@@ -107,7 +107,7 @@ def norm(text, states=False):
         text = anyascii(text.replace("°", " ").replace("º", " "))  # "N°5" -> "N 5", not "Ndeg5"
     text = text.lower().replace("&", " and ")
     if states:
-        if "," in text:  # whole-component French region/departement -> region code
+        if france and "," in text:  # France only: whole-component region/departement -> region code
             text = ",".join(FR_REGION_OF.get(FR_COMPONENT.sub(" ", c).strip(), c) for c in text.split(","))
         text = STATE_RE.sub(lambda m: STATES[m.group(1)], text)
     out = []
@@ -152,8 +152,10 @@ def _chunk(cols):
     """Normalize one batch while preserving a separate original-name view."""
     ids, names, addrs, countries = cols
     name = [norm(clean_name(x)) for x in names]
-    return (ids, [norm(x) for x in countries], name, [core_of(n) for n in name],
-            [norm(x, states=True) for x in addrs], [not (x or "").isascii() for x in names],
+    country = [norm(x) for x in countries]
+    return (ids, country, name, [core_of(n) for n in name],
+            [norm(x, states=True, france=c == "france") for x, c in zip(addrs, country)],
+            [not (x or "").isascii() for x in names],
             [raw_joined(x) for x in names])
 
 

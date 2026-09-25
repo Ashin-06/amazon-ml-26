@@ -22,8 +22,9 @@ def test_norm_canonicalizes_noise():
     assert norm("अरिहंत") != ""  # native script is transliterated, not dropped
     assert core_of(norm("Taran It Pvt Ltd")) == "taran it"
     # French region vs departement components share one code; street names stay untouched
-    assert norm("4 Rue du Nord, Lille, Nord", states=True) == "4 r du nord lille frhdf"
-    assert norm("19 R. Berthelot, Merignac, Gironde", states=True) == norm("19 R. Berthelot, Merignac, Nouvelle-Aquitaine", states=True)
+    assert norm("4 Rue du Nord, Lille, Nord", states=True, france=True) == "4 r du nord lille frhdf"
+    assert norm("12 Main St, Nord, ND", states=True) == "12 mn st nord nd"  # not France: untouched
+    assert norm("19 R. Berthelot, Merignac, Gironde", states=True, france=True) == norm("19 R. Berthelot, Merignac, Nouvelle-Aquitaine", states=True, france=True)
 
 
 def test_clean_name_phone_and_alias():
@@ -123,3 +124,11 @@ def test_block_finds_renamed_and_reordered_matches(tmp_path):
     c = duckdb.connect().execute(f"SELECT sid, tid FROM read_parquet({lit(out)})").fetchall()
     assert (0, 2) in c and (0, 3) in c and (1, 4) in c  # reordered address, renamed DBA, empty-address target
     assert (1, 5) not in c  # never across countries
+
+
+def test_skeleton_merges_transliterations_but_not_unrelated_names():
+    from fast_er.prep import skeleton
+    assert skeleton("lakshmi traders") == skeleton("lksmi traders")
+    assert skeleton("perfect") == skeleton("prphekt")
+    assert skeleton("blue river") != skeleton("green valley")
+    assert skeleton("12 main") .startswith("12")  # numbers kept verbatim
