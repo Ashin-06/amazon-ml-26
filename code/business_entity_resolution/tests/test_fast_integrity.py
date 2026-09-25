@@ -170,6 +170,22 @@ def test_fast_raw_to_model_to_validated_outputs(completed_pipeline):
         assert (root/'out'/name).read_bytes() == (root/'repeat'/name).read_bytes()
 
 
+def test_cached_training_scores_equal_full_refeaturization(completed_pipeline):
+    """train() reuses cached stage-1 matrices; production scoring from scratch must give the same scores."""
+    root = completed_pipeline
+    m1, m2, _ = model.load_models(root/'work/model')
+    con = model._connect(root/'work', 'train', '512MB', 1)
+    try:
+        keys, p1, p2 = model._score_all(con, m1, m2, 1, 7, root/'tmp_rescore')
+    finally:
+        con.close()
+    fresh = keys.assign(p1=p1, p2=p2)
+    hold = pd.read_parquet(root/'work/model/hold_preds.parquet').merge(fresh, on=['sid', 'tid'])
+    assert len(hold) == len(pd.read_parquet(root/'work/model/hold_preds.parquet')) > 0
+    assert np.allclose(hold.p_stage1, hold.p1, atol=1e-6) and np.allclose(hold.p_stage2, hold.p2, atol=1e-6)
+    assert not list((root/'work').glob('fe_train_*'))  # scratch removed
+
+
 def test_completed_cache_reuse_requires_exact_inputs(completed_pipeline):
     root = completed_pipeline
     settings = args(root/'pq', root/'work','train')

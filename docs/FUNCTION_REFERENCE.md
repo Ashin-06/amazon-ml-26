@@ -1019,6 +1019,15 @@ _score_all(con, models, m2, threads, chunks, tmp_parent)
 
 Score the complete graph using the production pipeline and run-owned disk caches.
 
+### `_score_cached`
+
+```python
+_score_cached(con, models, m2, parts, chunks, threads)
+```
+
+Production scores exactly as _score_all, for candidates already featurized once.
+parts = [(keys, path of their stage-1 matrix)]; together they must cover the candidate table.
+
 ### `evaluate_threshold`
 
 ```python
@@ -1044,7 +1053,17 @@ train(work, gt_path, n_train=300000, hold_mod=22, mem='20GB', threads=None, seed
 Fit classifiers and stacker, then evaluate disjoint tune/final reference groups.
 
 Stacker inputs use classifier-level cross-fitting. The learned lexicon uses
-non-hold references, so this is not full-pipeline cross-fitting.
+non-hold references, so this is not full-pipeline cross-fitting. Every training
+candidate is featurized once; the stage-1 matrices are cached in a run-owned scratch
+directory (removed afterwards) and reused for the production-scoring evaluation pass.
+
+### `_train`
+
+```python
+_train(work, gt_path, n_train, hold_mod, mem, threads, seed, rounds, chunks, leaves, lr, weight, backend, model_dir, own)
+```
+
+Body of train(); `own` is the scratch directory for cached stage-1 matrices.
 
 ### `load_models`
 

@@ -482,6 +482,27 @@ def _score_all(con, models, m2, threads, chunks, tmp_parent):
         shutil.rmtree(own)
 
 
+def _score_cached(con, models, m2, parts, chunks, threads):
+    """Production scores exactly as _score_all, for candidates already featurized once.
+    parts = [(keys, path of their stage-1 matrix)]; together they must cover the candidate table."""
+    keys = pd.concat([k for k, _ in parts], ignore_index=True)
+    if len(keys) != con.execute("SELECT count(*) FROM c").fetchone()[0]:
+        raise ValueError("Cached stage-1 matrices must cover every candidate exactly once")
+    p1 = []
+    for k, path in parts:
+        X = np.load(path, allow_pickle=False)
+        if len(X) != len(k):
+            raise ValueError("Cached stage-1 matrix does not match its keys")
+        p1.append(np.mean([_pred(m, X, threads) for m in models], axis=0))
+    p1 = np.concatenate(p1) if p1 else np.empty(0)
+    check_scores(p1)
+    _context(con, keys.sid.values, keys.tid.values, p1, chunks=chunks, threads=threads)
+    p2 = [_pred(m2, np.hstack([np.load(path, allow_pickle=False), _ctx_matrix(con, k)]), threads) for k, path in parts]
+    p2 = np.concatenate(p2) if p2 else np.empty(0)
+    check_scores(p2)
+    return keys, p1, p2
+
+
 def evaluate_threshold(sid, tid, p, truth, tune_sids, final_sids, grid=None):
     """Choose with tune labels, then evaluate final labels exactly once."""
     if not tune_sids or not final_sids or set(tune_sids) & set(final_sids):
@@ -515,8 +536,22 @@ def train(work, gt_path, n_train=300_000, hold_mod=22, mem="20GB", threads=None,
     """Fit classifiers and stacker, then evaluate disjoint tune/final reference groups.
 
     Stacker inputs use classifier-level cross-fitting. The learned lexicon uses
-    non-hold references, so this is not full-pipeline cross-fitting.
+    non-hold references, so this is not full-pipeline cross-fitting. Every training
+    candidate is featurized once; the stage-1 matrices are cached in a run-owned scratch
+    directory (removed afterwards) and reused for the production-scoring evaluation pass.
     """
+    Path(scratch(work)).mkdir(parents=True, exist_ok=True)
+    own = Path(tempfile.mkdtemp(prefix="fe_train_", dir=scratch(work)))
+    try:
+        return _train(work, gt_path, n_train, hold_mod, mem, threads, seed, rounds, chunks, leaves, lr,
+                      weight, backend, model_dir, own)
+    finally:
+        shutil.rmtree(own, ignore_errors=True)
+
+
+def _train(work, gt_path, n_train, hold_mod, mem, threads, seed, rounds, chunks, leaves, lr, weight, backend,
+           model_dir, own):
+    """Body of train(); `own` is the scratch directory for cached stage-1 matrices."""
     _check_args(n_train, hold_mod, chunks, rounds)
     P = _params(threads, seed, leaves, lr)
     if weight not in ("none", "ref", "sqrt"):
@@ -565,6 +600,7 @@ def train(work, gt_path, n_train=300_000, hold_mod=22, mem="20GB", threads=None,
             raise ValueError(f"{g} needs naturally retrieved positives and negatives")
         data[g] = {"keys": kk, "X": np.vstack(Xs), "y": y, "lab": lab}
         del Xs
+        np.save(own / f"{g}.npy", data[g]["X"])  # reused by the production-scoring pass
         lg(f"{g}: {len(kk):,} pairs, pos rate {y.mean():.3f}")
     P = _params(threads, seed, leaves, lr)
     m = {g: _fit(backend, P, data[g]["X"], data[g]["y"],
@@ -577,7 +613,7 @@ def train(work, gt_path, n_train=300_000, hold_mod=22, mem="20GB", threads=None,
     # Use complete lists so per-reference support and context equal the production definitions.
     ok, op1 = _predict_stage1(con, [m["A"], m["B"]],
                               "c.sid IN (SELECT sid FROM split WHERE g IS NULL)",
-                              threads, chunks, tag="others")
+                              threads, chunks, tmp=own, tag="o")
     allk = pd.concat([data[g]["keys"] for g in ("A", "B", "hold")] + [ok], ignore_index=True)
     allp = np.concatenate([data[g]["p1"] for g in ("A", "B", "hold")] + [op1])
     _context(con, allk.sid.values, allk.tid.values, allp, chunks=chunks, threads=threads)
@@ -591,7 +627,7 @@ def train(work, gt_path, n_train=300_000, hold_mod=22, mem="20GB", threads=None,
     # Hold labels never reach the learner, early stopping or a training log.
     w2 = pair_weights(np.concatenate([data["A"]["keys"].sid.values, data["B"]["keys"].sid.values]), weight)
     m2 = _fit(backend, P, X2, y2, w2, FEATS2, rounds)
-    del X2, y2, allk, allp, ok, op1
+    del X2, y2, allk, allp, op1
     hold_sids = con.execute("SELECT sid FROM split WHERE g = 'hold'").df().sid.tolist()
     tune_set = set(con.execute(f"""SELECT r.rid FROM rec r JOIN split s ON s.sid = r.rid
         WHERE s.g='hold' AND md5_number_lower(r.entity_id || 'tune26') % 2 = 0""").df().rid)
@@ -602,7 +638,17 @@ def train(work, gt_path, n_train=300_000, hold_mod=22, mem="20GB", threads=None,
     # Measure this additional pass on a bounded pilot before scaling.
     for entry in data.values():
         entry.pop("X2", None)
-    kk, p1, p2 = _score_all(con, [m["A"], m["B"]], m2, threads, chunks, scratch(work))
+    parts, off = [(data[g]["keys"], own / f"{g}.npy") for g in ("A", "B", "hold")], 0
+    for k in range(chunks):  # others were cached chunk by chunk in the order of their keys
+        path = own / f"o{k}.npy"
+        if path.exists():
+            n = np.load(path, mmap_mode="r").shape[0]
+            parts.append((ok.iloc[off:off + n], path))
+            off += n
+    if off != len(ok):
+        raise ValueError("Cached stage-1 coverage mismatch")
+    kk, p1, p2 = _score_cached(con, [m["A"], m["B"]], m2, parts, chunks, threads)
+    del ok, parts
     result = evaluate_threshold(kk.sid.values, kk.tid.values, p2, truth, tune_sids, final_sids)
     res = {"stage2": result}
     hk = kk.assign(p_stage1=p1, p_stage2=p2)
