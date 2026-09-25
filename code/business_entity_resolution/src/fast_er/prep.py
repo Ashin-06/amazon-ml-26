@@ -112,12 +112,25 @@ def raw_joined(text):
     return NON_ALNUM.sub("", (anyascii(text) if not text.isascii() else text).lower())
 
 
+PHONE = re.compile(r"[\s\-]*\+?\d[\d\- ]{6,}\d")
+ALIAS = re.compile(r"(?i)(?<![A-Za-z0-9])(?:a/k/a|aka|d/b/a|dba|trading as|t/a|also known as|formerly|doing business as|operating as)(?=\W)[:\s]*")
+
+
+def clean_name(text):
+    """Drop appended phone numbers; for 'Brand DBA Real Name' keep the part after the alias marker."""
+    if not isinstance(text, str) or not text:
+        return text
+    text = PHONE.sub(" ", text)
+    parts = ALIAS.split(text, maxsplit=1)
+    return parts[1] if len(parts) == 2 and parts[1].strip() else text
+
+
 def _chunk(cols):
     ids, names, addrs, countries = cols
-    name = [norm(x) for x in names]
+    name = [norm(clean_name(x)) for x in names]
     return (ids, [norm(x) for x in countries], name, [core_of(n) for n in name],
             [norm(x, states=True) for x in addrs], [not (x or "").isascii() for x in names],
-            [raw_joined(x) for x in names])
+            [raw_joined(clean_name(x)) for x in names])
 
 
 def core_of(name):
@@ -164,5 +177,9 @@ if __name__ == "__main__":
     assert norm("B+ Retail & Co.") == "b retail & co"
     assert norm("014889 Twentieth Ave, Nature Nature") == "14889 20th ave nature"
     assert norm("00 Second St") == "0 2nd st"
+    assert clean_name("MW Management Private  Limited - 2067865001").strip() == "MW Management Private  Limited"
+    assert clean_name("Veowex a/k/a Sbs & Brothers Private Limited") == "Sbs & Brothers Private Limited"
+    assert clean_name("Lumkelo formerly: East Stanley Inc") == "East Stanley Inc"
+    assert clean_name("Media Aka Services") == "Services"  # rare genuine 'aka' word: acceptable loss
     for s in sys.argv[1:] or ["train", "test"]:
         prepare(s)
