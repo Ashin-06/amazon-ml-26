@@ -154,6 +154,29 @@ def _chunk(cols):
             [raw_joined(clean_name(x)) for x in names])
 
 
+SKEL_PAIRS = (("ph", "f"), ("kh", "k"), ("gh", "g"), ("th", "t"), ("dh", "d"), ("bh", "b"), ("sh", "s"),
+              ("ch", "c"), ("ck", "k"), ("q", "k"), ("c", "k"), ("z", "j"), ("w", "v"), ("x", "ks"))
+VOWELS = re.compile(r"[aeiouyh]")
+REPEATS = re.compile(r"(.)\1+")
+
+
+def skeleton(text):
+    """Phonetic consonant skeleton of a normalized name: similar sounds merged, vowels dropped, repeats
+    collapsed. Transliteration variants the lexicon has not learned still line up
+    ("lakshmi"/"lksmi" -> "lksm", "perfect"/"prphekt" -> "prfkt")."""
+    out = []
+    for tok in text.split():
+        if tok.isdigit():
+            out.append(tok)
+            continue
+        for a, b in SKEL_PAIRS:
+            tok = tok.replace(a, b)
+        tok = REPEATS.sub(r"\1", VOWELS.sub("", tok))
+        if tok:
+            out.append(tok)
+    return " ".join(out)
+
+
 def core_of(name):
     """Name without legal forms / filler words (falls back to the full name)."""
     return " ".join(t for t in name.split() if t not in LEGAL) or name
