@@ -15,7 +15,6 @@ from pathlib import Path
 
 ALLOWED_EXT = {".py", ".md", ".txt", ".json", ".sh", ".cfg", ".toml"}
 DENY = re.compile(r"(?i)(kaggle\.json|access_token|\.env$|secret|credential|token|\.pem$|\.key$|id_rsa)")
-RUN_FILES = ("lgb_A.txt", "lgb_B.txt", "lgb2.txt", "metrics.json")
 
 ap = argparse.ArgumentParser()
 ap.add_argument("team"); ap.add_argument("output_dir")
@@ -43,8 +42,9 @@ for p in sorted(pkg.rglob("*")):
         files[f"code/business_entity_resolution/{rel.as_posix()}"] = p
 if a.run:
     run = Path(a.run)
-    for n in RUN_FILES:
-        files[f"code/business_entity_resolution/model/{n}"] = run / "model" / n
+    for f in sorted((run / "model").glob("*")):
+        if re.fullmatch(r"(lgb_[AB]|lgb2|model_[AB2])\.(txt|json)|metrics\.json", f.name):
+            files[f"code/business_entity_resolution/model/{f.name}"] = f
     files["code/business_entity_resolution/model/lexicon.json"] = run / "lexicon.json"
 missing = [str(s) for s in files.values() if not Path(s).is_file()]
 if missing:

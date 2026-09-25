@@ -280,6 +280,87 @@ def _params(threads, seed, leaves=127, lr=0.05):
                 num_threads=threads or 0, verbose=-1, seed=seed)
 
 
+_GPU = None
+
+
+def gpu_available():
+    """True if XGBoost can train on a CUDA GPU on this machine (checked once with a tiny fit)."""
+    global _GPU
+    if _GPU is None:
+        try:
+            import xgboost as xgb
+            d = xgb.DMatrix(np.random.rand(256, 4).astype(np.float32), label=np.arange(256) % 2)
+            xgb.train({"device": "cuda", "tree_method": "hist", "verbosity": 0}, d, 2)
+            _GPU = True
+        except Exception:
+            _GPU = False
+    return _GPU
+
+
+def resolve_backend(backend):
+    """'auto' -> 'xgb' when a CUDA GPU is usable (Kaggle T4, local RTX), else 'lgb' on CPU."""
+    if backend == "auto":
+        return "xgb" if gpu_available() else "lgb"
+    if backend not in ("xgb", "lgb"):
+        raise ValueError(f"backend must be auto|xgb|lgb, got {backend!r}")
+    return backend
+
+
+def _fit(backend, P, X, y, w, names, rounds, valid=None):
+    """Train one booster: XGBoost (GPU if available, CPU otherwise) or LightGBM (CPU)."""
+    if backend == "lgb":
+        vs = [lgb.Dataset(valid[0], valid[1], feature_name=list(names))] if valid is not None else []
+        return lgb.train(P, lgb.Dataset(X, y, feature_name=list(names), weight=w), rounds, valid_sets=vs,
+                         callbacks=[lgb.log_evaluation(100)] if vs else [])
+    import xgboost as xgb
+    xp = {"objective": "binary:logistic", "eval_metric": "logloss", "tree_method": "hist",
+          "device": "cuda" if gpu_available() else "cpu", "learning_rate": P["learning_rate"],
+          "max_leaves": P["num_leaves"], "grow_policy": "lossguide", "max_depth": 0, "min_child_weight": 5,
+          "subsample": 0.8, "colsample_bytree": 0.8, "reg_lambda": 1.0, "max_bin": 256, "seed": P["seed"],
+          "nthread": P["num_threads"] or 0, "verbosity": 1}
+    d = xgb.QuantileDMatrix(X, y, weight=w, feature_names=list(names))  # quantized: ~1 byte per value
+    ev = []
+    if valid is not None:
+        ev = [(xgb.QuantileDMatrix(valid[0], valid[1], ref=d, feature_names=list(names)), "hold")]
+    return xgb.train(xp, d, rounds, evals=ev, verbose_eval=100 if ev else False)
+
+
+def _pred(m, X, threads=None):
+    """Match probability for the rows of X, from either booster type."""
+    if isinstance(m, lgb.Booster):
+        return m.predict(X, num_threads=threads or 0)
+    return np.asarray(m.inplace_predict(X), dtype=np.float64)
+
+
+def _names(m):
+    """Ordered feature names a saved booster was trained with."""
+    return m.feature_name() if isinstance(m, lgb.Booster) else list(m.feature_names or [])
+
+
+def _save(m, base):
+    """Save a booster as BASE.txt (LightGBM) or BASE.json (XGBoost)."""
+    m.save_model(str(base) + (".txt" if isinstance(m, lgb.Booster) else ".json"))
+
+
+def _load(base):
+    """Load BASE.json (XGBoost, placed on the GPU when available) or BASE.txt (LightGBM)."""
+    js, txt = Path(str(base) + ".json"), Path(str(base) + ".txt")
+    if js.exists():
+        import xgboost as xgb
+        b = xgb.Booster(model_file=str(js))
+        b.set_param({"device": "cuda" if gpu_available() else "cpu"})
+        return b
+    return lgb.Booster(model_file=str(txt))
+
+
+def _importance(m, names):
+    """Gain importance per feature for either booster type."""
+    if isinstance(m, lgb.Booster):
+        return dict(zip(names, m.feature_importance("gain").round().tolist()))
+    g = m.get_score(importance_type="gain")
+    return {n: round(float(g.get(n, 0.0)), 1) for n in names}
+
+
 def _predict_stage1(con, models, where, threads, chunks, tmp=None, tag=""):
     """Featurize candidate rows matching `where` chunk by chunk; return keys + averaged p1.
     If tmp is given, stage-1 matrices are cached there as .npy for stage 2."""
@@ -289,7 +370,7 @@ def _predict_stage1(con, models, where, threads, chunks, tmp=None, tag=""):
         if not len(df):
             continue
         X = features(df)
-        p1.append(np.mean([m.predict(X, num_threads=threads or 0) for m in models], axis=0))
+        p1.append(np.mean([_pred(m, X, threads) for m in models], axis=0))
         keys.append(df[["sid", "tid"]])
         if tmp is not None:
             np.save(Path(tmp) / f"{tag}{k}.npy", X)
@@ -335,7 +416,7 @@ def pair_weights(sid, mode):
 
 
 def train(work, gt_path, n_train=300_000, hold_mod=22, mem="20GB", threads=None, seed=26, rounds=600,
-          chunks=8, leaves=127, lr=0.05, weight="none"):
+          chunks=8, leaves=127, lr=0.05, weight="none", backend="auto"):
     """Train the two-stage matcher on the train split and write WORK/model/.
 
     1. Validate labels; split S1s into A, B (matcher training) and hold (hash rule shared with the
@@ -376,14 +457,15 @@ def train(work, gt_path, n_train=300_000, hold_mod=22, mem="20GB", threads=None,
     P = _params(threads, seed, leaves, lr)
     if weight not in ("none", "ref", "sqrt"):
         raise ValueError(f"weight must be none|ref|sqrt, got {weight!r}")
-    m = {g: lgb.train(P, lgb.Dataset(data[g]["X"], data[g]["y"], feature_name=FEATS,
-                                     weight=pair_weights(data[g]["keys"].sid.values, weight)), rounds)
-         for g in ("A", "B")}
+    backend = resolve_backend(backend)
+    lg(f"booster backend: {backend} ({'GPU' if backend == 'xgb' and gpu_available() else 'CPU'})")
+    m = {g: _fit(backend, P, data[g]["X"], data[g]["y"], pair_weights(data[g]["keys"].sid.values, weight), FEATS,
+                 rounds) for g in ("A", "B")}
     lg("stage-1 models fitted")
     # p1: out-of-fold for A/B, averaged for everything else (holdout + all other train S1s).
-    data["A"]["p1"] = m["B"].predict(data["A"]["X"], num_threads=threads or 0)
-    data["B"]["p1"] = m["A"].predict(data["B"]["X"], num_threads=threads or 0)
-    data["hold"]["p1"] = np.mean([m[g].predict(data["hold"]["X"], num_threads=threads or 0) for g in "AB"], axis=0)
+    data["A"]["p1"] = _pred(m["B"], data["A"]["X"], threads)
+    data["B"]["p1"] = _pred(m["A"], data["B"]["X"], threads)
+    data["hold"]["p1"] = np.mean([_pred(m[g], data["hold"]["X"], threads) for g in "AB"], axis=0)
     # Competing S1s outside the sample only matter through shared targets.
     con.execute("""CREATE TABLE tsample AS SELECT DISTINCT tid FROM c
                    WHERE sid IN (SELECT sid FROM split WHERE g IS NOT NULL)""")
@@ -401,9 +483,8 @@ def train(work, gt_path, n_train=300_000, hold_mod=22, mem="20GB", threads=None,
     y2 = np.concatenate([data["A"]["y"], data["B"]["y"]])
     hd = data["hold"]
     w2 = pair_weights(np.concatenate([data["A"]["keys"].sid.values, data["B"]["keys"].sid.values]), weight)
-    m2 = lgb.train(P, lgb.Dataset(X2, y2, feature_name=FEATS2, weight=w2), rounds,
-                   valid_sets=[lgb.Dataset(hd["X2"], hd["y"], feature_name=FEATS2)],
-                   callbacks=[lgb.log_evaluation(100)])
+    m2 = _fit(backend, P, X2, y2, w2, FEATS2, rounds, valid=(hd["X2"], hd["y"]))
+    del X2
     hold_sids = con.execute("SELECT sid FROM split WHERE g = 'hold'").df().sid.tolist()
     # Hold is split in two: thresholds are tuned on "tune" and the score is reported on "final".
     tune_set = set(con.execute(f"""SELECT r.rid FROM rec r JOIN split s ON s.sid = r.rid
@@ -418,7 +499,7 @@ def train(work, gt_path, n_train=300_000, hold_mod=22, mem="20GB", threads=None,
                       ok.assign(p=op1)], ignore_index=True)
     comp = comp[comp.tid.isin(set(hk.tid))]
     res = {}
-    for name, p in (("stage1", hd["p1"]), ("stage2", m2.predict(hd["X2"], num_threads=threads or 0))):
+    for name, p in (("stage1", hd["p1"]), ("stage2", _pred(m2, hd["X2"], threads))):
         check_scores(p, name=f"hold {name}")
         allsid = np.concatenate([hk.sid.values, comp.sid.values])
         alltid = np.concatenate([hk.tid.values, comp.tid.values])
@@ -439,16 +520,16 @@ def train(work, gt_path, n_train=300_000, hold_mod=22, mem="20GB", threads=None,
     recall_ceiling = len(set(zip(hk.sid, hk.tid)) & set(zip(hd["lab"].sid, hd["lab"].tid))) / max(len(hd["lab"]), 1)
     metrics = {"holdout_macro_f05": res["stage2"]["final_macro_f05"], "threshold": res["stage2"]["threshold"],
                "params": {"n_train": n_train, "rounds": rounds, "leaves": leaves, "lr": lr, "hold_mod": hold_mod,
-                          "chunks": chunks, "seed": seed, "weight": weight},
+                          "chunks": chunks, "seed": seed, "weight": weight, "backend": backend,
+                          "gpu": bool(backend == "xgb" and gpu_available())},
                "labels": label_stats, "stage1": res["stage1"], "stage2": res["stage2"],
                "holdout_s1": len(hold_sids), "tune_s1": len(tune_sids), "final_s1": len(final_sids),
                "candidate_link_recall": recall_ceiling, "feature_names_stage1": FEATS, "feature_names_stage2": FEATS2,
-               "importance2": dict(zip(FEATS2, m2.feature_importance("gain").round().tolist())),
+               "importance2": _importance(m2, FEATS2),
                "seconds": time.time() - t0}
     out = Path(work) / "model"
     out.mkdir(parents=True, exist_ok=True)
-    m["A"].save_model(str(out / "lgb_A.txt")); m["B"].save_model(str(out / "lgb_B.txt"))
-    m2.save_model(str(out / "lgb2.txt"))
+    _save(m["A"], out / "model_A"); _save(m["B"], out / "model_B"); _save(m2, out / "model_2")
     hk.assign(y=hd["y"], p=hk["p_stage2"]).to_parquet(out / "hold_preds.parquet", index=False)
     pd.DataFrame({"sid": hold_sids}).to_parquet(out / "hold_sids.parquet", index=False)
     # Persist split membership by entity id (DuckDB's hash() may change across versions).
@@ -462,11 +543,13 @@ def train(work, gt_path, n_train=300_000, hold_mod=22, mem="20GB", threads=None,
 def load_models(model_dir):
     """Load the three boosters and refuse any whose feature list differs from this code's."""
     md = Path(model_dir)
-    m1 = [lgb.Booster(model_file=str(md / f"lgb_{g}.txt")) for g in "AB"]
-    m2 = lgb.Booster(model_file=str(md / "lgb2.txt"))
-    for m, want, name in ((m1[0], FEATS, "lgb_A"), (m1[1], FEATS, "lgb_B"), (m2, FEATS2, "lgb2")):
-        if m.feature_name() != list(want):
-            raise ValueError(f"{name}.txt was trained with {m.num_feature()} features that differ from this code's "
+    legacy = not any((md / f"model_2{e}").exists() for e in (".txt", ".json"))  # older runs: lgb_*.txt
+    bases = ["lgb_A", "lgb_B", "lgb2"] if legacy else ["model_A", "model_B", "model_2"]
+    m1 = [_load(md / b) for b in bases[:2]]
+    m2 = _load(md / bases[2])
+    for m, want, name in ((m1[0], FEATS, bases[0]), (m1[1], FEATS, bases[1]), (m2, FEATS2, bases[2])):
+        if _names(m) != list(want):
+            raise ValueError(f"{name} was trained with {len(_names(m))} features that differ from this code's "
                              f"{len(want)}; use the git tag the model was built with, or retrain")
     thr = json.loads((md / "metrics.json").read_text())["threshold"]
     check_scores([], thr)
@@ -500,7 +583,7 @@ def predict(work, split, out_dir, mem="20GB", threads=None, chunks=8, tmp=None):
             X = np.load(f)
             kk = keys.iloc[off:off + len(X)]
             off += len(X)
-            p2.append(m2.predict(np.hstack([X, _ctx_matrix(con, kk)]), num_threads=threads or 0))
+            p2.append(_pred(m2, np.hstack([X, _ctx_matrix(con, kk)]), threads))
             print(f"  [stage2 {split}] chunk {k + 1}/{chunks} {time.time() - t0:.0f}s", flush=True)
         if off != len(keys):
             raise RuntimeError(f"stage-2 consumed {off} rows but stage 1 produced {len(keys)}")
