@@ -334,23 +334,40 @@ def predict(work, split, out_dir, mem="20GB", threads=None, chunks=8, tmp=None):
           f"{time.time() - t0:.0f}s", flush=True)
 
 
-def write_outputs(con, scores_path, thr, out):
+def write_outputs(con, scores_path, thr, out, chunks=16):
     """Decision in DuckDB (p >= thr, then each target to its best S1) and stream both TSVs.
-    Every S1 in `rec` gets exactly one row; lists may be empty. Returns (links, S1 rows)."""
+    Every S1 in `rec` gets exactly one row; lists may be empty. Aggregation runs in S1 chunks
+    so memory stays bounded. Returns (links, S1 rows)."""
     out = Path(out)
     con.execute(f"CREATE OR REPLACE TABLE sc AS SELECT sid, tid, p FROM read_parquet('{scores_path}')")
     con.execute(f"""CREATE OR REPLACE TABLE pr AS SELECT sid, tid FROM (
           SELECT sid, tid, row_number() OVER (PARTITION BY tid ORDER BY p DESC, sid) AS r
           FROM sc WHERE p >= {thr}) WHERE r = 1""")
+    con.execute("CREATE OR REPLACE TABLE ids AS SELECT rid, entity_id, src FROM rec")
     for fname, col, table in (("matching_results.tsv", "matched_entity_ids", "pr"),
                               ("candidate_pairs.tsv", "candidate_entity_ids", "sc")):
-        cur = con.execute(f"""
-            SELECT s.entity_id, coalesce(string_agg(t.entity_id, ',' ORDER BY t.rid), '')
-            FROM rec s LEFT JOIN {table} x ON x.sid = s.rid LEFT JOIN rec t ON t.rid = x.tid
-            WHERE s.src = 1 GROUP BY s.rid, s.entity_id ORDER BY s.rid""")
         with open(out / fname, "w", encoding="utf-8", newline="\n") as f:
             f.write(f"source1_entity_id\t{col}\n")
-            while rows := cur.fetchmany(200_000):
-                f.writelines(f"{a}\t{b}\n" for a, b in rows)
+            for k in range(chunks):
+                cur = con.execute(f"""
+                    SELECT s.entity_id, coalesce(string_agg(t.entity_id, ',' ORDER BY t.rid), '')
+                    FROM ids s LEFT JOIN (SELECT * FROM {table} WHERE sid % {chunks} = {k}) x ON x.sid = s.rid
+                    LEFT JOIN ids t ON t.rid = x.tid
+                    WHERE s.src = 1 AND s.rid % {chunks} = {k} GROUP BY s.rid, s.entity_id ORDER BY s.rid""")
+                while rows := cur.fetchmany(200_000):
+                    f.writelines(f"{a}\t{b}\n" for a, b in rows)
     return (con.execute("SELECT count(*) FROM pr").fetchone()[0],
             con.execute("SELECT count(*) FROM rec WHERE src = 1").fetchone()[0])
+
+
+def rewrite(work, split, scores_path, out, thr=None, mem="8GB", threads=None):
+    """Re-emit both TSVs from a saved scores.parquet (e.g. after a crash or to try another threshold)."""
+    thr = thr if thr is not None else json.loads((Path(work) / "model" / "metrics.json").read_text())["threshold"]
+    con = duckdb.connect()
+    con.execute(f"SET memory_limit='{mem}'; SET preserve_insertion_order=false")
+    con.execute(f"SET temp_directory='{Path(scratch(work)) / 'duck_tmp'}'")
+    if threads:
+        con.execute(f"SET threads={threads}")
+    con.execute(f"CREATE TABLE rec AS SELECT rid, entity_id, src FROM read_parquet('{Path(work) / split}/norm_s*.parquet')")
+    n_match, n_s1 = write_outputs(con, scores_path, thr, out)
+    print(f"[rewrite {split}] thr={thr} {n_s1:,} rows, {n_match:,} links ({n_match / n_s1:.2f}/S1)", flush=True)
