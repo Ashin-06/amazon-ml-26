@@ -1,4 +1,6 @@
 <!-- DRAFT: fill team fields and the final selected run's numbers before submission -->
+> Implementation remains a draft. The audit checkout has 50 pair and 17 context features, production-consistent global evaluation and verified seed ensembles. It has no measured full-data score yet; historical run results below must be replaced with the selected run's actual results before submission.
+
 # ML Challenge 2026: Business Entity Resolution Solution
 
 **Team Name:** [Your Team Name]

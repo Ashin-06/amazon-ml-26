@@ -1,61 +1,27 @@
-# Business entity resolution — Amazon ML Challenge 2026
+# Business entity resolution — audit implementation
 
-Pipeline for matching every Source-1 business record to its Source-2 / Source-3
-records. Everything runs on CPU and uses only the supplied data (no external lookups).
-The final model is LightGBM (MIT license).
+This checkout contains the corrected fast pipeline and the older SQLite baseline. See [the review](../../docs/FINAL_HARDENING_REVIEW_2026-09-25.md), [runbook](../../docs/RUNBOOK.md) and [function reference](../../docs/FUNCTION_REFERENCE.md).
 
-## Pipeline (`src/fast_er/`)
+The fast model uses 50 pair features and 17 context/cluster features. Two first-stage classifiers are cross-fitted; the second stage uses their probabilities and competition context. The learned lexicon excludes held references. Thresholds use tuning macro F0.5, then final holdout is evaluated once with production scoring over the complete candidate graph.
 
-| Stage | File | What it does |
-|---|---|---|
-| 0 | `to_parquet.py` | Convert the supplied TSVs to parquet (strings verbatim). |
-| 1 | `prep.py` | Normalize names/addresses: anyascii transliteration, lowercase, punctuation removal, abbreviation/state canonicalization (US, India, France), zero-padded numbers, ordinals, repeated tokens. Adds a legal-form-free `core` name. |
-| 1b | `lexicon.py` | Learns a transliteration lexicon (e.g. `praivet→pvt`, `lksmi→laxmi`) from labelled train pairs whose target name was in a native script (holdout S1s excluded) and applies it to train and test. |
-| 2 | `block.py` | Candidate generation in DuckDB: hashed name keys (tokens, adjacent/whole-name concatenations) and address keys (tokens, adjacent bigrams), per country; keys shared by >300 targets dropped; idf-weighted overlap score; keep top-40 by total score ∪ top-20 by name score ∪ top-20 by address score per S1 (name score includes name×address-word composite keys). Writes `cands.parquet`. |
-| 3 | `model.py` | ~45 pair features (rapidfuzz similarities, digit/house-number agreement, name/address frequency, candidate-list context). Two stage-1 LightGBM models on disjoint S1 halves give out-of-fold probabilities; a stage-2 LightGBM adds competition context (rank within S1, best competing S1 for the same target). Decision: probability ≥ threshold, then each target goes to its single best S1. Threshold maximizes exact macro F0.5 on a held-out S1 set. |
+| Module | Role |
+|---|---|
+| to_parquet.py | Explicit UTF-8 conversion, empty strings and original fingerprints |
+| prep.py / lexicon.py | Normalized/original name views, addresses and training-only token mappings |
+| block.py | Natural name/address/composite candidates |
+| model.py | Features, weights, LightGBM/XGBoost, threshold selection and output |
+| validation.py | Record/label/endpoint/country/ownership checks |
+| integrity.py | Code, data, environment, model and output manifests |
+| run_stage1.py / run_stage3.py | Supported drivers |
 
-Drivers: `run_stage1.py` (stages 1–2 for a split), `run_stage3.py` (train + predict + write outputs).
-`kaggle/build_kernel.py` packs the same source into a Kaggle script kernel (how the full runs were executed:
-4 CPU cores, ~30 GB RAM, ~2–3 h end to end).
+Install requirements-dev.txt into an isolated Python 3.12 environment. CPU LightGBM is the default. XGBoost 3.0.0 is pinned; select backend xgb/auto explicitly when desired. A Kaggle GPU request alone does not select a model backend.
 
-## Reproduce
+Test from the workspace root:
 
-Python 3.12, `pip install -r requirements.txt`. From this directory, with the supplied data at `DATA/` (containing `train/`, `test/`):
+    python -m pytest code/business_entity_resolution/tests -q
 
-```text
-python src/fast_er/to_parquet.py DATA work/pq
-python src/fast_er/run_stage1.py train work/pq work work/pq/train_ground_truth.parquet --mem 18GB
-python src/fast_er/run_stage1.py test  work/pq work --mem 18GB
-python src/fast_er/run_stage3.py work work/pq/train_ground_truth.parquet test output --mem 16GB
-```
+Use fresh versioned directories under artifacts/. Source changes require retraining or matching saved source. Completed blocking can be verified/reused only with identical source, inputs, environment, lexicon and settings. Partial jobs do not resume. Existing model/output destinations are never overwritten.
 
-`output/` then holds `matching_results.tsv` (leaderboard file) and `candidate_pairs.tsv` (exactly the pairs
-the matcher scored; every match is a subset of it). `work/train/blocking_recall.json` and
-`work/model/metrics.json` hold blocking recall, the oracle ceiling, and holdout macro F0.5 for stage 1 and 2.
-The hold references are split in two: the threshold is tuned on the `tune` half and `holdout_macro_f05`
-is reported on the untouched `final` half, with competing non-hold references taking part in target
-ownership exactly as in the test decision. Split membership is saved in `work/model/split_ids.parquet`.
+Final packaging requires the selected run, audited original-input manifest, completed methodology and new destination. The archive includes both exact output TSVs, selected model and allowlisted source; creating it does not submit it.
 
-Safety checks built into the pipeline: labels that do not resolve to known records stop training;
-non-finite or out-of-range probabilities, null keys, and duplicate pairs stop output writing; saved models
-whose feature list differs from the code are refused before any work starts; each stage-1 split records the
-code hashes/settings that made it (`stage1_meta.json`) and refuses to mix versions.
-
-Check format with the organizers' validator, which ships in the supplied `student_resource/utils/` folder
-(not in this package):
-
-```text
-python PATH/TO/student_resource/utils/validate_submission.py --matching output/matching_results.tsv --candidate output/candidate_pairs.tsv --test-dir DATA/test
-```
-
-Tests: `python -m pytest tests/test_fast_er.py -q`.
-
-A submission zip in the organizers' layout (allow-listed files, optional model bundle, never overwrites):
-`python kaggle/package_submission.py TEAM output --run work` from the repository root paths shown in its docstring.
-
-## Older baseline
-
-`src/business_er/` and `src/run.py` are the first SQLite-FTS5 baseline written before the full-scale run.
-Its one-query-at-a-time retrieval is too slow for 1.7M test references, so it is not the submission pipeline.
-It (and `tests/test_baseline.py`, `tests/test_failure_cases.py`, `tests/test_foundations.py`) additionally needs
-`scikit-learn==1.7.2` and `scipy==1.17.1`, which the fast pipeline does not require.
+The older src/run.py SQLite baseline uses a distinct artifact format. Its supported commands remain in the legacy section of the runbook. Historical full-run results are not measurements of this corrected audit version.

@@ -12,15 +12,19 @@ from fast_er.model import predict, train  # noqa: E402
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("work"); ap.add_argument("gt"); ap.add_argument("pred_split"); ap.add_argument("out")
-    ap.add_argument("--n-train", type=int, default=300_000); ap.add_argument("--hold-mod", type=int, default=22)
+    ap.add_argument("--n-train", type=int, default=10_000); ap.add_argument("--hold-mod", type=int, default=22)
     ap.add_argument("--rounds", type=int, default=600)
-    ap.add_argument("--mem", default="20GB"); ap.add_argument("--threads", type=int)
+    ap.add_argument("--mem", default="4GB"); ap.add_argument("--threads", type=int, default=1)
     ap.add_argument("--skip-train", action="store_true"); ap.add_argument("--skip-predict", action="store_true")
     ap.add_argument("--chunks", type=int, default=8)
     ap.add_argument("--leaves", type=int, default=127); ap.add_argument("--lr", type=float, default=0.05)
+    ap.add_argument("--weight", choices=("none","ref","sqrt"), default="none")
+    ap.add_argument("--backend", choices=("lgb","xgb","auto"), default="lgb")
+    ap.add_argument("--seed", type=int, default=26)
+    ap.add_argument("--model-dir", default="model")
     a = ap.parse_args()
     if not a.skip_train:
         train(a.work, a.gt, a.n_train, a.hold_mod, a.mem, a.threads, rounds=a.rounds, leaves=a.leaves, lr=a.lr,
-              chunks=a.chunks)
+              chunks=a.chunks, weight=a.weight, backend=a.backend, seed=a.seed, model_dir=a.model_dir)
     if not a.skip_predict:
-        predict(a.work, a.pred_split, a.out, a.mem, a.threads, chunks=a.chunks)
+        predict(a.work, a.pred_split, a.out, a.mem, a.threads, chunks=a.chunks, model_dir=a.model_dir)

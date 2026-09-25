@@ -1,3 +1,5 @@
+> Historical SQLite-baseline document. Current fast-pipeline corrections and verification scope are in [the final review](FINAL_HARDENING_REVIEW_2026-09-25.md) and [runbook](RUNBOOK.md).
+
 # Amazon ML Challenge 2026 — Approach
 
 ## Problem

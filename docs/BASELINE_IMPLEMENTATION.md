@@ -1,3 +1,5 @@
+> Historical SQLite-baseline document. Current fast-pipeline corrections and verification scope are in [the final review](FINAL_HARDENING_REVIEW_2026-09-25.md) and [runbook](RUNBOOK.md).
+
 # Baseline implementation contract
 
 This addendum is written before completing the baseline code on 25 September 2026. It narrows the earlier design to one runnable CPU baseline. Optional embeddings, learned aliases and graph refinements are not required to run it.

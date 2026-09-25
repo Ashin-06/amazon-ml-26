@@ -1,3 +1,5 @@
+> Historical SQLite-baseline document. Current fast-pipeline corrections and verification scope are in [the final review](FINAL_HARDENING_REVIEW_2026-09-25.md) and [runbook](RUNBOOK.md).
+
 # Quality and completeness report
 
 Review date: 25 September 2026. This report covers the implemented offline baseline, its instructions and its verification. It does not certify that an unrun full-scale model is competitive or guarantee the absence of every possible defect.

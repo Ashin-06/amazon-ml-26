@@ -48,6 +48,7 @@ def main(argv=None):
     package.add_argument("--destination", required=True)
     quality = sub.add_parser("quality", help="Check workspace docs, sources and input integrity")
     quality.add_argument("--workspace", required=True)
+    quality.add_argument("--input-root", help="Read preserved originals from a separate checkout")
     args = parser.parse_args(argv)
     try:
         if args.command == "score":
@@ -70,7 +71,7 @@ def main(argv=None):
             result = build_package(args.output_dir, args.model_dir, args.documentation, args.input_manifest, args.destination)
         else:
             from business_er.quality import check_workspace
-            result = check_workspace(args.workspace)
+            result = check_workspace(args.workspace, args.input_root)
             if not result["passed"]:
                 print(json.dumps(result, indent=2, allow_nan=False))
                 return 1

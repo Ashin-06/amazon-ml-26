@@ -1,4 +1,58 @@
-# Runbook: local baseline and later Kaggle execution
+# Runbook: verified fast pipeline
+
+This checkout is separate from active runs in D:/Amazon ML 26. Use fresh artifact paths. Old unmanifested outputs cannot be reused. A small training-reference count does not bound full-target retrieval or global scoring cost.
+
+## Verify this checkout
+
+    python -m pytest code/business_entity_resolution/tests -q
+    python code/business_entity_resolution/src/run.py quality --workspace . --input-root "D:\Amazon ML 26"
+
+Install requirements-dev.txt in a dedicated virtual environment; avoid global application upgrades.
+
+## Fresh run
+
+The commands below use the full official dataset when DATA points to it. They were not executed by this review. Measure a bounded pilot first. Record when a pilot uses a reduced target pool, since that changes the difficulty.
+
+    python code/business_entity_resolution/src/fast_er/to_parquet.py DATA artifacts/pq-audit-v1
+    python code/business_entity_resolution/src/fast_er/run_stage1.py train artifacts/pq-audit-v1 artifacts/run-audit-v1 artifacts/pq-audit-v1/train_ground_truth.parquet --mem 4GB --threads 1 --workers 1 --chunks 24
+    python code/business_entity_resolution/src/fast_er/run_stage1.py test artifacts/pq-audit-v1 artifacts/run-audit-v1 --mem 4GB --threads 1 --workers 1 --chunks 24
+    python code/business_entity_resolution/src/fast_er/run_stage3.py artifacts/run-audit-v1 artifacts/pq-audit-v1/train_ground_truth.parquet test artifacts/predictions-audit-v1 --n-train 10000 --rounds 100 --mem 4GB --threads 1 --chunks 24 --weight ref --backend lgb
+
+DATA contains train/ and test/. Default official location: D:/Amazon ML 26/6ab10eb3b23ba_student_resource/student_resource/dataset.
+
+The memory limit applies to DuckDB, not all Python/booster allocations. Corrected evaluation includes an additional full scoring pass. Source/feature/split changes require fresh derivation and retraining. The old DuckDB-hash split is incompatible with the new stable split.
+
+Use --skip-predict for training/evaluation only or --skip-train for matching saved models. Each experiment needs a new work/model destination. Completed blocking may be reused only after exact manifest verification; partial work does not resume. Manual-threshold rewrites of legacy scores are rejected.
+
+## Optional verified seed ensemble
+
+Keep the same blocking run. Train a second model with --seed 27 --model-dir model_s27 and a distinct prediction destination. The saved tune/final membership is fixed across seeds. CPU pilots remain the default.
+
+    python code/business_entity_resolution/src/fast_er/ensemble.py eval artifacts/run-audit-v1 artifacts/pq-audit-v1/train_ground_truth.parquet model model_s27
+    python code/business_entity_resolution/src/fast_er/ensemble.py apply artifacts/run-audit-v1 test artifacts/predictions-audit-v1 artifacts/predictions-s27 --out artifacts/ensemble-predictions-v1
+
+Evaluation recomputes the complete candidate graph for each model, so measure its cost first. Application verifies every member and uses the threshold saved by evaluation; arbitrary manual thresholds are not accepted. The same package command supports ensemble prediction directories and includes all selected member models. Use --model-dir for a single nondefault model when packaging.
+
+## Validate and package
+
+Use the existing strict validator with all three original test TSVs and both output TSVs. Also run the unchanged official validator with --check-ids when RAM is available; it can compete with active training.
+
+    python code/business_entity_resolution/src/run.py validate --source1 DATA/test/test_source1.tsv --source2 DATA/test/test_source2.tsv --source3 DATA/test/test_source3.tsv --matching artifacts/predictions-audit-v1/matching_results.tsv --candidate artifacts/predictions-audit-v1/candidate_pairs.tsv --work-dir artifacts/checks-audit-v1
+    python code/business_entity_resolution/kaggle/package_submission.py TEAM artifacts/predictions-audit-v1 --run artifacts/run-audit-v1 --doc Documentation_template.md --input-manifest docs/research/input_manifest.json --destination artifacts/TEAM_submission_audit_v1.zip
+
+Replace DATA/TEAM with actual values. Complete real team fields and selected methodology first. Model/source/output fingerprints and original official test hashes must agree. Package creation does not upload.
+
+## Kaggle
+
+The builder accepts OUT OWNER SLUG STAGES, plus --s1/--s3 for measured settings. Select block_train,block_test,model or model_eval. --gpu requests hardware; choose --backend xgb/auto explicitly in stage-3 arguments to select it.
+
+Attach only the seven converted parquet files and conversion_manifest.json. Offline execution requires compatible wheels for missing exact pins; --no-internet uses no package index. Completed prior stages need --reuse plus both blocking stages for manifest verification. Earlier unmanifested kernels are incompatible.
+
+No local test guarantees quota, full-data disk usage or GPU capacity. Log actual public results separately. Maximum five leaderboard uploads per day; deadline 27 September 2026, 23:59 IST.
+
+---
+
+# Legacy SQLite baseline commands
 
 These commands match the implemented interface. They are instructions, not a record that full-data runs have already finished. The source/Markdown checks and synthetic integration test are described in [QUALITY_REPORT.md](QUALITY_REPORT.md).
 

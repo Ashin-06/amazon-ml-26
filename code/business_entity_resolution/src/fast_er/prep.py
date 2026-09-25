@@ -82,6 +82,7 @@ NULLS = {"null", "none", "nan"}
 
 
 def _tok(t):
+    """Canonicalize zero padding, abbreviations and ordinal tokens."""
     if t.isdigit():
         return t.lstrip("0") or "0"  # "014889" == "14889" (zero-padding noise)
     return TOKEN_MAP.get(t) or ORDINALS.get(t, t)
@@ -116,21 +117,31 @@ PHONE = re.compile(r"[\s\-]*\+?\d[\d\- ]{6,}\d")
 ALIAS = re.compile(r"(?i)(?<![A-Za-z0-9])(?:a/k/a|aka|d/b/a|dba|trading as|t/a|also known as|formerly|doing business as|operating as)(?=\W)[:\s]*")
 
 
+FR_ALIAS = re.compile(r"(?i)(?<![A-Za-z0-9])(?:n[ée]e|anciennement)(?=\W)[:\s]*")
+
+
 def clean_name(text):
     """Drop appended phone numbers; for 'Brand DBA Real Name' keep the part after the alias marker."""
     if not isinstance(text, str) or not text:
         return text
+    original = text
     text = PHONE.sub(" ", text)
+    if not text.strip():
+        return original
     parts = ALIAS.split(text, maxsplit=1)
-    return parts[1] if len(parts) == 2 and parts[1].strip() else text
+    if len(parts) == 2 and parts[1].strip():
+        return parts[1]
+    parts = FR_ALIAS.split(text, maxsplit=1)
+    return parts[1] if len(parts) == 2 and parts[0].strip() and parts[1].strip() else text
 
 
 def _chunk(cols):
+    """Normalize one batch while preserving a separate original-name view."""
     ids, names, addrs, countries = cols
     name = [norm(clean_name(x)) for x in names]
     return (ids, [norm(x) for x in countries], name, [core_of(n) for n in name],
             [norm(x, states=True) for x in addrs], [not (x or "").isascii() for x in names],
-            [raw_joined(clean_name(x)) for x in names])
+            [raw_joined(x) for x in names])
 
 
 def core_of(name):
@@ -140,29 +151,33 @@ def core_of(name):
 
 def prepare(split, pq_dir="work/pq", out_dir="work", workers=8):
     """Stream each source in 100k-row batches; one parquet per source, global rid offsets."""
+    if type(workers) is not int or workers < 1:
+        raise ValueError("workers must be a positive integer")
     out = Path(out_dir) / split
-    out.mkdir(parents=True, exist_ok=True)
+    out.mkdir(parents=True, exist_ok=False)
     rid = 0
     with Pool(workers) as pool:
         for src in (1, 2, 3):
             path = out / f"norm_s{src}.parquet"
             pf = pq.ParquetFile(f"{pq_dir}/{split}_source{src}.parquet")
             n = pf.metadata.num_rows
-            if path.exists():
-                rid += n
-                continue
+            expected = {"entity_id", "business_name", "business_address", "country"}
+            if set(pf.schema_arrow.names) != expected or any(not pa.types.is_string(f.type) and not pa.types.is_large_string(f.type) for f in pf.schema_arrow):
+                raise ValueError("Raw parquet must contain the four source columns as strings")
             t = time.time()
             batches = ((b.column("entity_id").to_pylist(), b.column("business_name").to_pylist(),
                         b.column("business_address").to_pylist(), b.column("country").to_pylist())
                        for b in pf.iter_batches(batch_size=100_000))
             tmp = path.with_suffix(".tmp")
-            writer = None
+            schema = pa.schema([("rid", pa.int32()), ("src", pa.int8()), ("entity_id", pa.string()),
+                ("country", pa.string()), ("name", pa.string()), ("core", pa.string()), ("addr", pa.string()),
+                ("na", pa.bool_()), ("rawn", pa.string())])
+            writer = pq.ParquetWriter(tmp, schema)
             for ids, country, name, core, addr, na, rawn in pool.imap(_chunk, batches):
                 table = pa.table({"rid": pa.array(range(rid, rid + len(ids)), pa.int32()),
                                   "src": pa.array([src] * len(ids), pa.int8()),
                                   "entity_id": ids, "country": country, "name": name, "core": core, "addr": addr,
-                                  "na": pa.array(na, pa.bool_()), "rawn": rawn})
-                writer = writer or pq.ParquetWriter(tmp, table.schema)
+                                  "na": pa.array(na, pa.bool_()), "rawn": rawn}, schema=schema)
                 writer.write_table(table)
                 rid += len(ids)
             writer.close()

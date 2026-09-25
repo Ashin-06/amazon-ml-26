@@ -15,36 +15,48 @@ import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from .model import hold_rule, lit
+from .model import hold_rule, lit, normalized_sql
 from .prep import core_of
+from .validation import load_truth
+from .integrity import digest
 
 
 def build_lexicon(work, gt_path, hold_mod=22, min_count=3, min_share=0.5, split="train"):
+    """Learn deterministic token mappings from audited non-hold labels only."""
+    if split != "train" or min_count < 1 or not 0 < min_share <= 1:
+        raise ValueError("Lexicon needs train labels and valid count/share settings")
+    if (Path(work) / "lexicon.json").exists():
+        raise FileExistsError("Lexicon already exists")
     w = Path(work) / split
     con = duckdb.connect()
-    con.execute(f"CREATE VIEW rec AS SELECT * FROM read_parquet({lit(w / 'norm_s*.parquet')})")
-    rows = con.execute(f"""
+    con.execute(f"CREATE VIEW rec AS SELECT * FROM read_parquet({normalized_sql(w)})")
+    load_truth(con, gt_path)
+    cursor = con.execute(f"""
         SELECT a.name, b.name FROM (
           SELECT source1_entity_id s, unnest(string_split(matched_entity_ids, ',')) t
           FROM read_parquet({lit(gt_path)}) WHERE coalesce(matched_entity_ids, '') <> '') g
         JOIN rec a ON a.entity_id = g.s JOIN rec b ON b.entity_id = g.t
-        WHERE b.na AND NOT {hold_rule('a.entity_id', hold_mod)}""").fetchall()
+        WHERE b.na AND NOT {hold_rule('a.entity_id', hold_mod)}""")
     pair, tot = defaultdict(Counter), Counter()
-    for s_name, t_name in rows:
-        st, tt = s_name.split(), t_name.split()
-        if len(st) != len(tt):
-            continue
-        for x, y in zip(tt, st):
-            tot[x] += 1
-            if x != y:
-                pair[x][y] += 1
+    seen = 0
+    while rows := cursor.fetchmany(100_000):
+        seen += len(rows)
+        for s_name, t_name in rows:
+            st, tt = s_name.split(), t_name.split()
+            if len(st) != len(tt):
+                continue
+            for x, y in zip(tt, st):
+                tot[x] += 1
+                if x != y:
+                    pair[x][y] += 1
     lex = {}
     for x, c in pair.items():
-        y, n = c.most_common(1)[0]
+        y, n = min(c.items(), key=lambda item: (-item[1], item[0]))
         if n >= min_count and n / tot[x] >= min_share:
             lex[x] = y
-    (Path(work) / "lexicon.json").write_text(json.dumps(lex, indent=0, sort_keys=True))
-    print(f"[lexicon] {len(lex):,} entries from {len(rows):,} transliterated train pairs", flush=True)
+    (Path(work) / "lexicon.json").write_text(json.dumps(lex, indent=0, sort_keys=True), encoding="utf-8")
+    print(f"[lexicon] {len(lex):,} entries from {seen:,} transliterated train pairs", flush=True)
+    con.close()
     return lex
 
 
@@ -53,23 +65,27 @@ def apply_lexicon(work, split):
     w = Path(work) / split
     marker = w / "lexicon_applied"
     if marker.exists():
-        return
-    lex = json.loads((Path(work) / "lexicon.json").read_text())
+        raise FileExistsError("Use the stage driver to verify completed lexicon application")
+    lex = json.loads((Path(work) / "lexicon.json").read_text(encoding="utf-8"))
     changed = 0
-    for path in sorted(w.glob("norm_s*.parquet")):
-        t = pq.read_table(path)
-        na = t.column("na").to_pylist()
-        names = t.column("name").to_pylist()
-        cores = t.column("core").to_pylist()
-        for i, flag in enumerate(na):
-            if flag:
-                new = " ".join(lex.get(x, x) for x in names[i].split())
-                if new != names[i]:
-                    names[i], cores[i] = new, core_of(new)
-                    changed += 1
-        t = t.set_column(t.schema.get_field_index("name"), "name", pa.array(names))
-        t = t.set_column(t.schema.get_field_index("core"), "core", pa.array(cores))
-        pq.write_table(t, str(path) + ".tmp")
+    for path in (w / f"norm_s{i}.parquet" for i in (1,2,3)):
+        source = pq.ParquetFile(path)
+        with pq.ParquetWriter(str(path) + ".tmp", source.schema_arrow) as writer:
+            for batch in source.iter_batches(batch_size=100_000):
+                t = pa.Table.from_batches([batch])
+                na = t.column("na").to_pylist()
+                names = t.column("name").to_pylist()
+                cores = t.column("core").to_pylist()
+                for i, flag in enumerate(na):
+                    if flag:
+                        new = " ".join(lex.get(x, x) for x in names[i].split())
+                        if new != names[i]:
+                            names[i], cores[i] = new, core_of(new)
+                            changed += 1
+                t = t.set_column(t.schema.get_field_index("name"), "name", pa.array(names))
+                t = t.set_column(t.schema.get_field_index("core"), "core", pa.array(cores))
+                writer.write_table(t)
+        source.close()
         Path(str(path) + ".tmp").replace(path)
-    marker.write_text(str(changed))
+    marker.write_text(json.dumps({"changed": changed, "lexicon": digest(Path(work) / "lexicon.json")}), encoding="utf-8")
     print(f"[lexicon] {split}: rewrote {changed:,} transliterated names", flush=True)

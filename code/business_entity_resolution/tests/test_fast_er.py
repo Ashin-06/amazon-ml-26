@@ -62,9 +62,9 @@ def test_macro_f05_edge_cases():
 
 
 def _rec(con):
-    con.execute("""CREATE TABLE rec AS SELECT * FROM (VALUES
+    con.execute("""CREATE TABLE rec AS SELECT *, 'us' AS country FROM (VALUES
         (0, 1, 'S1-1'), (1, 1, 'S1-2'), (2, 1, 'S1-3'),
-        (3, 2, 'S2-a'), (4, 3, 'S3-b'), (5, 2, 'S2-c')) t(rid, src, entity_id)""")
+        (3, 2, 'S2-10'), (4, 3, 'S3-20'), (5, 2, 'S2-30')) t(rid, src, entity_id)""")
 
 
 def test_write_outputs_every_s1_and_sql_tie_rule(tmp_path):
@@ -76,8 +76,8 @@ def test_write_outputs_every_s1_and_sql_tie_rule(tmp_path):
     rows = dict(l.rstrip("\n").split("\t") for l in (tmp_path / "matching_results.tsv").read_text().splitlines()[1:])
     cands = dict(l.rstrip("\n").split("\t") for l in (tmp_path / "candidate_pairs.tsv").read_text().splitlines()[1:])
     assert n_s1 == 3 and set(rows) == {"S1-1", "S1-2", "S1-3"}
-    assert rows == {"S1-1": "S2-a", "S1-2": "S2-c", "S1-3": ""}  # tie on S2-a -> lowest sid, as decide()
-    assert cands["S1-3"] == "" and set(cands["S1-1"].split(",")) == {"S2-a", "S3-b"}
+    assert rows == {"S1-1": "S2-10", "S1-2": "S2-30", "S1-3": ""}  # tie on S2-10 -> lowest sid, as decide()
+    assert cands["S1-3"] == "" and set(cands["S1-1"].split(",")) == {"S2-10", "S3-20"}
     py = decide(sc.sid.values, sc.tid.values, sc.p.values, 0.5)
     assert py == {0: [3], 1: [5]} and n_match == 2
 

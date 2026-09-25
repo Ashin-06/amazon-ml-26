@@ -35,13 +35,14 @@ def write_function_reference(workspace):
     return {"path": str(target), "source_files": len(list(source_root.rglob("*.py")))}
 
 
-def check_workspace(workspace):
+def check_workspace(workspace, input_root=None):
     """Check required docs, local links, source syntax/docstrings and original hashes.
 
     Read only explicit project files and paths from the audited input manifest.
     No model quality, resource quota or full-data runtime guarantee is implied.
     """
     workspace = Path(workspace).resolve(strict=True)
+    input_root = Path(input_root).resolve(strict=True) if input_root else workspace
     errors, checks = [], {}
     package = workspace / "code/business_entity_resolution"
     required = REQUIRED_DOCS + tuple("code/business_entity_resolution/" + name for name in
@@ -60,7 +61,7 @@ def check_workspace(workspace):
             target = target.strip("<>")
             if "://" in target or target.startswith("#"):
                 continue
-            local = target.split("#", 1)[0]
+            local = re.sub(r":\d+$", "", target.split("#", 1)[0])
             if local and not (path.parent / local).exists():
                 errors.append(f"Broken link in {path.name}: {target}")
     checks["markdown_files"] = len(markdown)
@@ -85,8 +86,8 @@ def check_workspace(workspace):
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         verified = 0
         for name, expected in manifest.items():
-            path = (workspace / name).resolve()
-            if not path.is_relative_to(workspace):
+            path = (input_root / name).resolve()
+            if not path.is_relative_to(input_root):
                 errors.append("Input manifest path escapes workspace")
                 continue
             if not path.is_file() or path.stat().st_size != expected["bytes"] or file_digest(path) != expected["sha256"]:

@@ -373,7 +373,7 @@ Document every source function/method from AST signatures and full docstrings.
 ### `check_workspace`
 
 ```python
-check_workspace(workspace)
+check_workspace(workspace, input_root=None)
 ```
 
 Check required docs, local links, source syntax/docstrings and original hashes.
@@ -573,6 +573,650 @@ Check both outputs against all sources using bounded cache and disk indexes.
 All three sources and both outputs are mandatory. Output ordering is arbitrary.
 Raises on duplicates, invalid IDs, missing/extra rows or matches not scored as
 candidates. A successful return always includes target-existence checks.
+
+## fast_er/__init__.py
+
+Verified offline business-entity matching with DuckDB and LightGBM.
+
+## fast_er/block.py
+
+Stage 2: candidate generation (blocking) with DuckDB set joins.
+
+Every record gets hashed keys, namespaced by country and field:
+  name    : core-name tokens (len>=2), adjacent-token concatenations incl. short
+            tokens ("n"+"infra" -> "ninfra", "paulita"+"wilson" -> "paulitawilson",
+            catches @handles / domains), first-3 concat; whole core name (cap `cap_whole`).
+  name x address word : each core-name token (len>=2) / whole-name concat joined with
+            each non-numeric address word (any position) ("pioneerinfotech|pune"), so
+            generic names still block within their city. Counted as name evidence.
+  address : tokens (len>=3 or containing a digit) and adjacent token bigrams
+            ("1550 beverly") that survive component reordering.
+Keys held by more than `cap` targets are dropped (too common to discriminate).
+Pair score = sum of idf over shared keys (total, name-only, address-only).
+Name-rank ties: more address evidence first, then an empty address (no conflict) over a conflicting one.
+Kept per S1: top-`k` by total score  UNION  top-`k_field` by name  UNION
+top-`k_field` by address, so address-only (renamed DBA) and name-only
+(missing address) matches both survive. Output: work/<split>/cands.parquet.
+
+### `block`
+
+```python
+block(split, work='work', cap=300, k=25, k_field=10, chunks=8, threads=None, mem='20GB', cap_whole=1000)
+```
+
+Build fresh natural candidates; partial chunks are never treated as completed work.
+
+### `blocking_recall`
+
+```python
+blocking_recall(split='train', work='work', gt_path='work/pq/train_ground_truth.parquet')
+```
+
+Train-only: link recall and oracle macro F0.5 (empty prediction for singletons = 1.0).
+
+## fast_er/ensemble.py
+
+Verified equal-weight seed ensembles with complete-graph evaluation and immutable outputs.
+
+### `members`
+
+```python
+members(work, model_dirs)
+```
+
+Load at least two distinct, verified models sharing hold membership and training inputs.
+
+### `align_scores`
+
+```python
+align_scores(base, scores)
+```
+
+Align complete unique key sets, rejecting duplicates even if group totals would cancel.
+
+### `evaluate`
+
+```python
+evaluate(work, gt_path, model_dirs, name='ensemble', mem='4GB', threads=1, chunks=24)
+```
+
+Re-score every candidate for each selected member; tune once and evaluate final once.
+
+### `apply`
+
+```python
+apply(work, split, out_dir, score_dirs, name='ensemble', mem='4GB', threads=1)
+```
+
+Average verified member predictions on identical candidates using the selected threshold.
+
+### `main`
+
+```python
+main()
+```
+
+Parse explicit ensemble members or prediction directories; threshold comes from evaluation.
+
+## fast_er/integrity.py
+
+Content fingerprints and fail-closed completion records for the fast pipeline.
+
+### `digest`
+
+```python
+digest(path)
+```
+
+Hash a file in bounded blocks; never load a complete data file into memory.
+
+### `files_digest`
+
+```python
+files_digest(paths)
+```
+
+Describe explicitly named files, refusing symlinks and duplicate basenames.
+
+### `code_digest`
+
+```python
+code_digest()
+```
+
+Fingerprint every fast-pipeline module, including its drivers and integrity rules.
+
+### `environment`
+
+```python
+environment()
+```
+
+Record the Python version and libraries that affect numerical or data behavior.
+
+### `read_json`
+
+```python
+read_json(path)
+```
+
+Read UTF-8 JSON without permitting a missing completion manifest.
+
+### `seal`
+
+```python
+seal(directory, filename, inputs, outputs)
+```
+
+Publish a completion record only after every explicitly listed output exists.
+
+### `verify`
+
+```python
+verify(directory, filename, inputs=None)
+```
+
+Reject incomplete, changed or incompatible artifacts; never bless legacy runs.
+
+### `stage_inputs`
+
+```python
+stage_inputs(pq_dir, split, gt, settings, lexicon=None)
+```
+
+Bind blocking to raw inputs, labels, code, environment, chunks and lexicon.
+
+### `verify_stage`
+
+```python
+verify_stage(work, split)
+```
+
+Verify finished normalized/candidate files and the currently selected lexicon.
+
+## fast_er/lexicon.py
+
+Stage 1b: learned transliteration lexicon (training labels only, holdout S1s excluded, no external data).
+
+Many India targets spell English business names in native scripts; after anyascii
+"Perfect Engineering Private Limited" reads "prphekt imjiniyrimg praivet limitet".
+For labelled train pairs whose target name was non-ASCII and has the same token
+count as the S1 name, tokens are aligned by position and (translit -> english)
+counts are kept when frequent and consistent. The lexicon is then applied to
+every non-ASCII-named record (train and test) before blocking/features.
+
+### `build_lexicon`
+
+```python
+build_lexicon(work, gt_path, hold_mod=22, min_count=3, min_share=0.5, split='train')
+```
+
+Learn deterministic token mappings from audited non-hold labels only.
+
+### `apply_lexicon`
+
+```python
+apply_lexicon(work, split)
+```
+
+Rewrite name/core of non-ASCII-named records in work/<split>/norm_s*.parquet (idempotent via marker).
+
+## fast_er/model.py
+
+Stage 3: pair features, two-stage LightGBM matcher, threshold tuning, submission writing.
+
+Stage 1 (per pair): blocking scores/ranks, rapidfuzz similarities on name / core
+name / address, digit-token agreement, missingness, how common the name/address
+is, and candidate-list context. Two stage-1 models are trained on disjoint S1
+halves (A, B) so every training pair gets an out-of-fold probability p1.
+
+Stage 2 (per pair, with context): stage-1 features + p1 + how p1 compares with the
+S1's other candidates and with the best competing S1 for the same target.
+
+Decision: keep pairs with p2 >= threshold, then each target goes only to its
+highest-probability S1 (labels show every target belongs to at most one S1).
+The threshold maximises exact macro F0.5 on the 'tune' half of the held-out S1s (with
+competing non-hold S1s taking part in target ownership); the score is reported on the other
+'final' half. Hold S1s are never used for fitting or for the lexicon.
+
+### `_num_feats`
+
+```python
+_num_feats(sa, ta)
+```
+
+Digit-token agreement; hn_* compare the first number (house/plot number): typo vs neighbour.
+
+### `features`
+
+```python
+features(df, threads=1)
+```
+
+Stage-1 feature matrix (float32, column order FEATS) for joined candidate rows.
+
+### `_pairs`
+
+```python
+_pairs(con, where)
+```
+
+Candidate rows (with group features) joined to both records' normalized text.
+
+### `lit`
+
+```python
+lit(value)
+```
+
+SQL string literal with quotes escaped (paths may contain apostrophes).
+
+### `normalized_sql`
+
+```python
+normalized_sql(directory)
+```
+
+Explicit three-file parquet expression; never ingest an unmanifested wildcard match.
+
+### `configure`
+
+```python
+configure(con, mem, threads, temp_dir)
+```
+
+Validated DuckDB resource settings.
+
+### `scratch`
+
+```python
+scratch(work)
+```
+
+Directory for spill/temporary files: $FASTER_TMP if set (e.g. /tmp on Kaggle), else the work dir.
+
+### `_connect`
+
+```python
+_connect(work, split, mem, threads)
+```
+
+Load a verified stage; reject incompatible schemas and candidate endpoints.
+
+### `_context`
+
+```python
+_context(con, sid, tid, p1, anchor_where='TRUE', chunks=8, threads=1)
+```
+
+Stage-2 context columns (order CTX) aligned to (sid, tid) via a DuckDB window pass.
+
+### `_anchors`
+
+```python
+_anchors(con, where, chunks, threads=1)
+```
+
+Cluster consistency: a reference's true matches are variants of each other, while a decoy
+(another business at the same address) is not. For each plausible pair (p1 >= ANCHOR_MIN), compare
+the target with the S1's other strongest candidates (top ANCHOR_K with p1 >= ANCHOR_P) and keep the
+best name / core-name / address similarity and the number of such anchors. Table `anc`.
+
+### `_ctx_matrix`
+
+```python
+_ctx_matrix(con, keys)
+```
+
+Fetch context rows for keys (DataFrame sid, tid) in keys' order.
+
+### `check_scores`
+
+```python
+check_scores(p, thr=None, name='scores')
+```
+
+Probabilities must be finite and in [0,1]; NaN would otherwise pass a SQL `p >= thr` filter.
+
+### `decide`
+
+```python
+decide(sid, tid, p, thr)
+```
+
+Threshold, then give each target only to its best S1 (ties: lowest sid, same rule as the SQL
+writer). Returns {sid: [tid,...]}.
+
+### `macro_f05`
+
+```python
+macro_f05(truth, pred, all_sids)
+```
+
+Exact per-reference macro F0.5, retaining empty and unretrieved references.
+
+### `hold_rule`
+
+```python
+hold_rule(col, hold_mod)
+```
+
+SQL predicate selecting holdout S1s (~1/hold_mod of references).
+
+### `_params`
+
+```python
+_params(threads, seed, leaves=127, lr=0.05)
+```
+
+Return fixed-round CPU settings; reject invalid resources before fitting.
+
+### `gpu_available`
+
+```python
+gpu_available()
+```
+
+True if XGBoost can train on a CUDA GPU on this machine (checked once with a tiny fit).
+
+### `resolve_backend`
+
+```python
+resolve_backend(backend)
+```
+
+'auto' -> 'xgb' when a CUDA GPU is usable (Kaggle T4, local RTX), else 'lgb' on CPU.
+
+### `_fit`
+
+```python
+_fit(backend, P, X, y, w, names, rounds, valid=None)
+```
+
+Train one booster: XGBoost (GPU if available, CPU otherwise) or LightGBM (CPU).
+
+### `_pred`
+
+```python
+_pred(m, X, threads=None)
+```
+
+Match probability for the rows of X, from either booster type.
+
+### `_names`
+
+```python
+_names(m)
+```
+
+Ordered feature names a saved booster was trained with.
+
+### `_save`
+
+```python
+_save(m, base)
+```
+
+Save a booster as BASE.txt (LightGBM) or BASE.json (XGBoost).
+
+### `_load`
+
+```python
+_load(base)
+```
+
+Load BASE.json (XGBoost, placed on the GPU when available) or BASE.txt (LightGBM).
+
+### `_importance`
+
+```python
+_importance(m, names)
+```
+
+Gain importance per feature for either booster type.
+
+### `pair_weights`
+
+```python
+pair_weights(sid, mode)
+```
+
+Per-pair training weights. 'none': every pair 1. 'ref': each reference's pairs sum to a
+constant (the metric averages per reference); 'sqrt': halfway (1/sqrt(n_candidates)). Mean 1.
+
+### `_predict_stage1`
+
+```python
+_predict_stage1(con, models, where, threads, chunks, tmp=None, tag='')
+```
+
+Featurize candidate rows matching `where` chunk by chunk; return keys + averaged p1.
+If tmp is given, stage-1 matrices are cached there as .npy for stage 2.
+
+### `_check_args`
+
+```python
+_check_args(n_train, hold_mod, chunks, rounds)
+```
+
+Reject nonsensical split sizes and work settings before reading data.
+
+### `_load_truth`
+
+```python
+_load_truth(con, gt_path)
+```
+
+Compatibility entry point for the shared label-integrity gate.
+
+### `_score_all`
+
+```python
+_score_all(con, models, m2, threads, chunks, tmp_parent)
+```
+
+Score the complete graph using the production pipeline and run-owned disk caches.
+
+### `evaluate_threshold`
+
+```python
+evaluate_threshold(sid, tid, p, truth, tune_sids, final_sids, grid=None)
+```
+
+Choose with tune labels, then evaluate final labels exactly once.
+
+### `model_path`
+
+```python
+model_path(work, name)
+```
+
+Resolve one model/ensemble subdirectory without allowing traversal or absolute paths.
+
+### `train`
+
+```python
+train(work, gt_path, n_train=300000, hold_mod=22, mem='20GB', threads=None, seed=26, rounds=600, chunks=8, leaves=127, lr=0.05, weight='none', backend='lgb', model_dir='model')
+```
+
+Fit classifiers and stacker, then evaluate disjoint tune/final reference groups.
+
+Stacker inputs use classifier-level cross-fitting. The learned lexicon uses
+non-hold references, so this is not full-pipeline cross-fitting.
+
+### `load_models`
+
+```python
+load_models(model_dir)
+```
+
+Load the three boosters and refuse any whose feature list differs from this code's.
+
+### `predict`
+
+```python
+predict(work, split, out_dir, mem='20GB', threads=None, chunks=8, tmp=None, model_dir='model')
+```
+
+Verify model/data provenance, score every candidate and seal new output files.
+
+### `write_outputs`
+
+```python
+write_outputs(con, scores_path, thr, out, chunks=64)
+```
+
+Decision in DuckDB (p >= thr, then each target to its best S1) and stream both TSVs.
+Every S1 in `rec` gets exactly one row; lists may be empty. Aggregation runs in S1 chunks
+so memory stays bounded. Returns (links, S1 rows).
+
+### `rewrite`
+
+```python
+rewrite(work, split, scores_path, out, thr=None, mem='8GB', threads=None)
+```
+
+Refuse unverified legacy score rewrites; verified predictions use immutable destinations.
+
+## fast_er/prep.py
+
+Stage 1: normalize every record of one split into work/<split>/norm_s{1,2,3}.parquet.
+
+Columns: rid (int, row id within split), src (1/2/3), entity_id, country,
+name (normalized), core (name without legal/stop words), addr (normalized),
+na (original name was non-ASCII, i.e. transliterated), rawn (raw name, no spaces/mapping).
+Non-ASCII text (Indic scripts, French accents) is transliterated with anyascii
+so cross-script pairs share a Latin view. No external lookups.
+
+### `_tok`
+
+```python
+_tok(t)
+```
+
+Canonicalize zero padding, abbreviations and ordinal tokens.
+
+### `norm`
+
+```python
+norm(text, states=False)
+```
+
+Lowercase, transliterate, strip punctuation, canonicalize tokens, drop repeated tokens.
+
+### `raw_joined`
+
+```python
+raw_joined(text)
+```
+
+Transliterated, lowercase, alphanumerics only, no spaces, no abbreviation mapping.
+
+### `clean_name`
+
+```python
+clean_name(text)
+```
+
+Drop appended phone numbers; for 'Brand DBA Real Name' keep the part after the alias marker.
+
+### `_chunk`
+
+```python
+_chunk(cols)
+```
+
+Normalize one batch while preserving a separate original-name view.
+
+### `core_of`
+
+```python
+core_of(name)
+```
+
+Name without legal forms / filler words (falls back to the full name).
+
+### `prepare`
+
+```python
+prepare(split, pq_dir='work/pq', out_dir='work', workers=8)
+```
+
+Stream each source in 100k-row batches; one parquet per source, global rid offsets.
+
+## fast_er/run_stage1.py
+
+Normalize, learn/apply the train lexicon, block, then publish a completion manifest.
+
+### `provenance`
+
+```python
+provenance(a)
+```
+
+Fingerprint inputs, settings, the complete source and selected lexicon.
+
+### `run`
+
+```python
+run(a)
+```
+
+Run a fresh stage or verify a completed one; incomplete stages cannot resume.
+
+### `main`
+
+```python
+main()
+```
+
+Parse the supported stage command and execute it.
+
+## fast_er/run_stage3.py
+
+Stage 3 driver: train the matcher on train candidates, then predict a split.
+
+Usage: python run_stage3.py WORK GT_PARQUET PRED_SPLIT OUT_DIR [--n-train N] [--hold-mod M] [--mem 20GB] [--threads N]
+
+## fast_er/to_parquet.py
+
+Convert explicit UTF-8 TSV inputs to string-only parquet in a fresh, verified directory.
+
+### `convert`
+
+```python
+convert(data, out)
+```
+
+Preserve every string and empty field; seal all seven original-input fingerprints.
+
+## fast_er/validation.py
+
+Disk-backed schema, reference coverage, label and candidate integrity gates.
+
+### `validate_records`
+
+```python
+validate_records(con)
+```
+
+Require unique integer internal keys, valid string source IDs and country fields.
+
+### `validate_pairs`
+
+```python
+validate_pairs(con, table)
+```
+
+Reject duplicates, unknown or reversed endpoints and cross-country candidates.
+
+### `load_truth`
+
+```python
+load_truth(con, gt_path)
+```
+
+Require exactly one label row per S1, including empty lists, and unique target ownership.
 
 ## run.py
 

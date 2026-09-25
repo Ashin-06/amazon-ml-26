@@ -22,7 +22,7 @@ from pathlib import Path
 
 import duckdb
 
-from .model import configure, lit
+from .model import configure, lit, normalized_sql
 
 KEYS_SQL = """
 CREATE OR REPLACE TABLE keys AS
@@ -58,13 +58,17 @@ SELECT rid, src, te, 1::TINYINT, hash(country || '|a|' || k) FROM (
 
 
 def block(split, work="work", cap=300, k=25, k_field=10, chunks=8, threads=None, mem="20GB", cap_whole=1000):
+    """Build fresh natural candidates; partial chunks are never treated as completed work."""
+    for name, value in (("cap", cap), ("cap_whole", cap_whole), ("k", k), ("k_field", k_field), ("chunks", chunks)):
+        if type(value) is not int or value < 1:
+            raise ValueError(name + " must be a positive integer")
     out = Path(work) / split / "cands.parquet"
     if out.exists():
-        return out
+        raise FileExistsError("Use the stage driver to verify completed blocking outputs")
     t0 = time.time()
     con = duckdb.connect()
     configure(con, mem, threads, Path(os.environ.get("FASTER_TMP") or work) / "duck_tmp")
-    con.execute(f"CREATE TABLE rec AS SELECT rid, src, country, core, addr FROM read_parquet({lit(Path(work) / split / 'norm_s*.parquet')})")
+    con.execute(f"CREATE TABLE rec AS SELECT rid, src, country, core, addr FROM read_parquet({normalized_sql(Path(work) / split)})")
     con.execute(KEYS_SQL)
     con.execute("DROP TABLE rec")
     n_t = con.execute("SELECT count(DISTINCT rid) FROM keys WHERE src > 1").fetchone()[0]
@@ -79,18 +83,16 @@ def block(split, work="work", cap=300, k=25, k_field=10, chunks=8, threads=None,
     con.execute("DROP TABLE keys")
     print(f"[block {split}] keys ready {time.time() - t0:.0f}s  targets={n_t:,}", flush=True)
     tmp = Path(work) / split / "cands_parts"
-    tmp.mkdir(parents=True, exist_ok=True)
+    tmp.mkdir(parents=True, exist_ok=False)
     for c in range(chunks):
         part = tmp / f"{c}.parquet"
-        if part.exists():
-            continue
         con.execute(f"""
             COPY (
               WITH s AS (
                 SELECT q.sid, p.tid, sum(p.w)::FLOAT AS s,
                        coalesce(sum(p.w) FILTER (WHERE p.f <> 1), 0)::FLOAT AS sn,
                        coalesce(sum(p.w) FILTER (WHERE p.f = 1), 0)::FLOAT AS sa,
-                       count(*)::SMALLINT AS nk, bool_or(p.te) AS te
+                       count(*)::INTEGER AS nk, bool_or(p.te) AS te
                 FROM q JOIN post p USING (h)
                 WHERE q.sid % {chunks} = {c}
                 GROUP BY q.sid, p.tid),
@@ -99,15 +101,16 @@ def block(split, work="work", cap=300, k=25, k_field=10, chunks=8, threads=None,
                           row_number() OVER (PARTITION BY sid ORDER BY sn DESC, sa DESC, te DESC, tid) AS r_n,
                           row_number() OVER (PARTITION BY sid ORDER BY sa DESC, tid) AS r_a
                 FROM s)
-              SELECT sid, tid, s, sn, sa, nk, r_s::SMALLINT AS r_s,
-                     (CASE WHEN sn > 0 THEN r_n ELSE 9999 END)::SMALLINT AS r_n,
-                     (CASE WHEN sa > 0 THEN r_a ELSE 9999 END)::SMALLINT AS r_a
+              SELECT sid, tid, s, sn, sa, nk, r_s::INTEGER AS r_s,
+                     (CASE WHEN sn > 0 THEN r_n ELSE 9999 END)::INTEGER AS r_n,
+                     (CASE WHEN sa > 0 THEN r_a ELSE 9999 END)::INTEGER AS r_a
               FROM r WHERE r_s <= {k} OR (r_n <= {k_field} AND sn > 0) OR (r_a <= {k_field} AND sa > 0)
             ) TO {lit(part)} (FORMAT parquet)""")
         print(f"[block {split}] chunk {c + 1}/{chunks} {time.time() - t0:.0f}s", flush=True)
-    con.execute(f"COPY (SELECT * FROM read_parquet({lit(tmp / '*.parquet')})) TO {lit(out)} (FORMAT parquet)")
+    con.execute(f"COPY (SELECT * FROM read_parquet({'[' + ','.join(lit(tmp / f'{i}.parquet') for i in range(chunks)) + ']'})) TO {lit(out)} (FORMAT parquet)")
     n = con.execute(f"SELECT count(*), count(DISTINCT sid) FROM read_parquet({lit(out)})").fetchone()
     print(f"[block {split}] done {n[0]:,} pairs for {n[1]:,} S1  {time.time() - t0:.0f}s", flush=True)
+    con.close()
     return out
 
 
@@ -115,12 +118,9 @@ def blocking_recall(split="train", work="work", gt_path="work/pq/train_ground_tr
     """Train-only: link recall and oracle macro F0.5 (empty prediction for singletons = 1.0)."""
     con = duckdb.connect()
     w = Path(work) / split
-    con.execute(f"CREATE VIEW ids AS SELECT rid, entity_id FROM read_parquet({lit(w / 'norm_s*.parquet')})")
-    con.execute(f"""CREATE TABLE gt AS
-        SELECT a.rid AS sid, b.rid AS tid FROM (
-          SELECT source1_entity_id AS s, unnest(string_split(matched_entity_ids, ',')) AS t
-          FROM read_parquet({lit(gt_path)}) WHERE coalesce(matched_entity_ids, '') <> '') g
-        JOIN ids a ON a.entity_id = g.s JOIN ids b ON b.entity_id = g.t""")
+    from .validation import load_truth
+    con.execute(f"CREATE VIEW rec AS SELECT * FROM read_parquet({normalized_sql(w)})")
+    load_truth(con, gt_path)
     res = {}
     for label, cond in (("all", "TRUE"), ("top_s10", "c.r_s <= 10"), ("top_s25", "c.r_s <= 25")):
         r = con.execute(f"""
@@ -133,4 +133,5 @@ def blocking_recall(split="train", work="work", gt_path="work/pq/train_ground_tr
             FROM hit""").fetchone()
         res[label] = {"link_recall": r[0], "oracle_f05": r[1]}
     res["pairs_per_s1"] = con.execute(f"SELECT count(*) / count(DISTINCT sid) FROM read_parquet({lit(w / 'cands.parquet')})").fetchone()[0]
+    con.close()
     return res
