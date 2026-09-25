@@ -416,7 +416,7 @@ def pair_weights(sid, mode):
 
 
 def train(work, gt_path, n_train=300_000, hold_mod=22, mem="20GB", threads=None, seed=26, rounds=600,
-          chunks=8, leaves=127, lr=0.05, weight="none", backend="auto"):
+          chunks=8, leaves=127, lr=0.05, weight="none", backend="auto", model_dir="model"):
     """Train the two-stage matcher on the train split and write WORK/model/.
 
     1. Validate labels; split S1s into A, B (matcher training) and hold (hash rule shared with the
@@ -433,11 +433,14 @@ def train(work, gt_path, n_train=300_000, hold_mod=22, mem="20GB", threads=None,
     con = _connect(work, "train", mem, threads)
     label_stats = _load_truth(con, gt_path)
     # Disjoint S1 groups by a seeded hash of the entity id (never used as a feature).
-    # Holdout = fixed hash rule shared with the lexicon step (which excludes these S1s).
+    # Holdout = fixed hash rule shared with the lexicon step (which excludes these S1s). The seed picks
+    # which references form training halves A/B (seed 26 keeps the original 'ab' order), so several
+    # seeds give an ensemble evaluated on the same hold and the same tune/final halves.
+    ab_salt = "ab" if seed == 26 else f"ab{seed}"
     half = n_train // 2
     con.execute(f"""CREATE TABLE split AS SELECT rid AS sid,
           CASE WHEN ho THEN 'hold' WHEN h < {half} THEN 'A' WHEN h < {n_train} THEN 'B' END AS g
-        FROM (SELECT rid, ho, row_number() OVER (PARTITION BY ho ORDER BY hash(entity_id || 'ab')) - 1 AS h
+        FROM (SELECT rid, ho, row_number() OVER (PARTITION BY ho ORDER BY hash(entity_id || {lit(ab_salt)})) - 1 AS h
               FROM (SELECT rid, entity_id, {hold_rule('entity_id', hold_mod)} AS ho FROM rec WHERE src = 1))""")
     data = {}
     for g in ("A", "B", "hold"):
@@ -488,7 +491,7 @@ def train(work, gt_path, n_train=300_000, hold_mod=22, mem="20GB", threads=None,
     hold_sids = con.execute("SELECT sid FROM split WHERE g = 'hold'").df().sid.tolist()
     # Hold is split in two: thresholds are tuned on "tune" and the score is reported on "final".
     tune_set = set(con.execute(f"""SELECT r.rid FROM rec r JOIN split s ON s.sid = r.rid
-                                  WHERE s.g = 'hold' AND hash(r.entity_id || 'tune{seed}') % 2 = 0""").df().rid)
+                                  WHERE s.g = 'hold' AND hash(r.entity_id || 'tune26') % 2 = 0""").df().rid)
     tune_sids = [s for s in hold_sids if s in tune_set]
     final_sids = [s for s in hold_sids if s not in tune_set]
     truth = hd["lab"].groupby("sid")["tid"].apply(set).to_dict()
@@ -535,7 +538,7 @@ def train(work, gt_path, n_train=300_000, hold_mod=22, mem="20GB", threads=None,
                "candidate_link_recall": recall_ceiling, "feature_names_stage1": FEATS, "feature_names_stage2": FEATS2,
                "importance2": _importance(m2, FEATS2),
                "seconds": time.time() - t0}
-    out = Path(work) / "model"
+    out = Path(work) / model_dir
     out.mkdir(parents=True, exist_ok=True)
     _save(m["A"], out / "model_A"); _save(m["B"], out / "model_B"); _save(m2, out / "model_2")
     hk.assign(y=hd["y"], p=hk["p_stage2"]).to_parquet(out / "hold_preds.parquet", index=False)
@@ -564,7 +567,7 @@ def load_models(model_dir):
     return m1, m2, thr
 
 
-def predict(work, split, out_dir, mem="20GB", threads=None, chunks=8, tmp=None):
+def predict(work, split, out_dir, mem="20GB", threads=None, chunks=8, tmp=None, model_dir="model"):
     """Score every candidate pair of `split` with the saved boosters and write the two TSVs.
 
     Stage-1 features are cached per chunk in a run-owned temp dir, stage-2 context is built from
@@ -574,7 +577,7 @@ def predict(work, split, out_dir, mem="20GB", threads=None, chunks=8, tmp=None):
     if not isinstance(chunks, int) or chunks < 1:
         raise ValueError(f"chunks must be a positive int, got {chunks!r}")
     t0 = time.time()
-    m1, m2, thr = load_models(Path(work) / "model")  # fail before any expensive work
+    m1, m2, thr = load_models(Path(work) / model_dir)  # fail before any expensive work
     con = _connect(work, split, mem, threads)
     # Run-owned temp dir: cleanup can only ever delete what this call created.
     Path(tmp or scratch(work)).mkdir(parents=True, exist_ok=True)
