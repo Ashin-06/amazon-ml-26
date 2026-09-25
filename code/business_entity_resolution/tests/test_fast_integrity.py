@@ -413,3 +413,22 @@ def test_stage1_fingerprint_covers_exactly_the_code_stage1_runs():
             assert all(m + ".py" in integrity.STAGE1_CODE or m in ("", "fast_er") for m in local), (name, mods)
     assert integrity.code_digest(integrity.STAGE1_CODE) != integrity.code_digest()
     assert "model.py" not in integrity.STAGE1_CODE and "run_stage1.py" in integrity.STAGE1_CODE
+
+
+
+def test_density_plan_matches_test_counts():
+    plan = model.density_plan({"us": (1000, 5000), "india": (1000, 4000), "x": (10, 10)},
+                              {"us": (500, 3000), "india": (900, 5000), "france": (5, 5)})
+    us, ind = plan["us"], plan["india"]
+    assert abs(us["keep_references"] - 0.5) < 1e-9 and abs(us["keep_targets"] - 0.6) < 1e-9
+    assert abs(us["remove_entities"] - 0.4) < 1e-9 and abs(us["remove_references_only"] - 0.1) < 1e-9
+    assert ind["remove_entities"] == 0 and abs(ind["remove_references_only"] - 0.1) < 1e-9
+    assert "x" not in plan and "france" not in plan
+
+
+def test_training_under_test_density_runs_and_keeps_holdout(completed_pipeline):
+    root = completed_pipeline
+    m = model.train(root/'work', root/'pq/train_ground_truth.parquet', n_train=70, hold_mod=4, backend='lgb',
+                    mem='512MB', threads=1, rounds=3, chunks=7, leaves=7, model_dir='model_dens', density=True)
+    assert m["params"]["density"] and m["test_density"]["plan"]
+    assert m["holdout_s1"] == json.loads((root/'work/model/metrics.json').read_text())["holdout_s1"]

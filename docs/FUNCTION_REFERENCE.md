@@ -857,6 +857,29 @@ _connect(work, split, mem, threads)
 
 Load a verified stage; reject incompatible schemas and candidate endpoints.
 
+### `density_plan`
+
+```python
+density_plan(train_counts, test_counts)
+```
+
+Per country: fractions of reference-side entities to remove so the training graph has the test's density.
+
+counts: {country: (references, targets)}. With k_s / k_t = test / train reference / target ratios (capped at 1),
+a share e of references is removed as whole businesses (the reference, its true targets and an equal share of
+ownerless targets) and a further share o as the reference only (its targets stay, ownerless, like the test's
+extra decoys), so kept references = k_s and kept targets = k_t. Countries absent from the test are unchanged.
+
+### `_thin_to_test_density`
+
+```python
+_thin_to_test_density(con, work, hold_mod)
+```
+
+Training only: drop references / records (deterministic hash, never holdout references or their links) so each
+country's reference and target counts match the test split's, then rebuild frequency and competition features.
+Uses only unlabeled test counts. Returns the per-country plan and removed counts.
+
 ### `_context`
 
 ```python
@@ -1079,10 +1102,12 @@ Resolve one model/ensemble subdirectory without allowing traversal or absolute p
 ### `train`
 
 ```python
-train(work, gt_path, n_train=300000, hold_mod=22, mem='20GB', threads=None, seed=26, rounds=600, chunks=8, leaves=127, lr=0.05, weight='none', backend='auto', model_dir='model')
+train(work, gt_path, n_train=300000, hold_mod=22, mem='20GB', threads=None, seed=26, rounds=600, chunks=8, leaves=127, lr=0.05, weight='none', backend='auto', model_dir='model', density=False)
 ```
 
 Fit classifiers and stacker, then evaluate disjoint tune/final reference groups.
+density=True trains and evaluates under the test split's per-country reference/target density
+(_thin_to_test_density), so competition features and the tuned threshold match test conditions.
 
 Stacker inputs use classifier-level cross-fitting. The learned lexicon uses
 non-hold references, so this is not full-pipeline cross-fitting. Every training
@@ -1093,7 +1118,7 @@ evaluation pass. n_train above the number of non-holdout references trains on al
 ### `_train`
 
 ```python
-_train(work, gt_path, n_train, hold_mod, mem, threads, seed, rounds, chunks, leaves, lr, weight, backend, model_dir, own)
+_train(work, gt_path, n_train, hold_mod, mem, threads, seed, rounds, chunks, leaves, lr, weight, backend, model_dir, own, density=False)
 ```
 
 Body of train(); `own` is the scratch directory for cached stage-1 matrices.

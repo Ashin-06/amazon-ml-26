@@ -58,7 +58,7 @@ SELECT *,
   count(*) OVER (PARTITION BY tid) AS t_nc,
   rank() OVER (PARTITION BY tid ORDER BY s DESC) AS t_rank,
   s / max(s) OVER (PARTITION BY tid) AS t_rel
-FROM read_parquet({cands})
+FROM {cands}
 """
 
 BASE = ["s", "sn", "sa", "nk", "r_s", "r_n", "r_a", "n_c", "s_rel", "s_gap", "t_nc", "t_rank", "t_rel",
@@ -227,9 +227,59 @@ def _connect(work, split, mem, threads):
     if con.execute("SELECT count(*) FROM rec WHERE skel IS NULL").fetchone()[0]:
         raise ValueError("skeleton missing for some records")
     con.execute("DROP TABLE skel")
-    con.execute(GROUP_SQL.format(cands=lit(w / "cands.parquet")))
+    con.execute(GROUP_SQL.format(cands=f"read_parquet({lit(w / 'cands.parquet')})"))
     validate_pairs(con, "c")
     return con
+
+
+def density_plan(train_counts, test_counts):
+    """Per country: fractions of reference-side entities to remove so the training graph has the test's density.
+
+    counts: {country: (references, targets)}. With k_s / k_t = test / train reference / target ratios (capped at 1),
+    a share e of references is removed as whole businesses (the reference, its true targets and an equal share of
+    ownerless targets) and a further share o as the reference only (its targets stay, ownerless, like the test's
+    extra decoys), so kept references = k_s and kept targets = k_t. Countries absent from the test are unchanged."""
+    plan = {}
+    for c, (s_tr, t_tr) in train_counts.items():
+        if c not in test_counts or not s_tr or not t_tr:
+            continue
+        k_s, k_t = min(1.0, test_counts[c][0] / s_tr), min(1.0, test_counts[c][1] / t_tr)
+        e = min(1 - k_t, 1 - k_s)
+        plan[c] = {"remove_entities": round(e, 4), "remove_references_only": round((1 - k_s) - e, 4),
+                   "keep_references": round(k_s, 4), "keep_targets": round(1 - e, 4)}
+    return plan
+
+
+def _thin_to_test_density(con, work, hold_mod):
+    """Training only: drop references / records (deterministic hash, never holdout references or their links) so each
+    country's reference and target counts match the test split's, then rebuild frequency and competition features.
+    Uses only unlabeled test counts. Returns the per-country plan and removed counts."""
+    test = con.execute(f"""SELECT country, sum((src = 1)::INT), sum((src > 1)::INT)
+                           FROM read_parquet({normalized_sql(Path(work) / 'test')}) GROUP BY 1""").fetchall()
+    train = con.execute("SELECT country, sum((src = 1)::INT), sum((src > 1)::INT) FROM rec GROUP BY 1").fetchall()
+    plan = density_plan({c: (a, b) for c, a, b in train}, {c: (a, b) for c, a, b in test})
+    con.execute("CREATE OR REPLACE TABLE dplan (country VARCHAR, e DOUBLE, o DOUBLE)")
+    for c, p in plan.items():
+        con.execute("INSERT INTO dplan VALUES (?, ?, ?)", [c, p["remove_entities"], p["remove_references_only"]])
+    u = lambda salt: f"(md5_number_lower(r.entity_id || '{salt}') % 1000000) / 1e6"  # noqa: E731
+    con.execute(f"""CREATE OR REPLACE TABLE rm_s AS SELECT r.rid, {u('dens26')} < d.e AS whole FROM rec r JOIN dplan d USING (country)
+                    WHERE r.src = 1 AND NOT {hold_rule('r.entity_id', hold_mod)} AND {u('dens26')} < d.e + d.o""")
+    con.execute(f"""CREATE OR REPLACE TABLE rm_t AS
+        SELECT g.tid AS rid FROM gt g JOIN rm_s ON rm_s.rid = g.sid WHERE rm_s.whole
+        UNION SELECT r.rid FROM rec r JOIN dplan d USING (country)
+        WHERE r.src > 1 AND r.rid NOT IN (SELECT tid FROM gt) AND {u('dens26o')} < d.e""")
+    con.execute("CREATE OR REPLACE TABLE rm AS SELECT rid FROM rm_s UNION SELECT rid FROM rm_t")
+    removed = dict(zip(("references", "targets"), con.execute("SELECT (SELECT count(*) FROM rm_s), (SELECT count(*) FROM rm_t)").fetchone()))
+    con.execute("""CREATE OR REPLACE TABLE rec AS SELECT r.* EXCLUDE (fc_t, fc_s, fa_t),
+          sum((src > 1)::INT) OVER (PARTITION BY country, core) AS fc_t,
+          sum((src = 1)::INT) OVER (PARTITION BY country, core) AS fc_s,
+          CASE WHEN addr = '' THEN -1 ELSE sum((src > 1)::INT) OVER (PARTITION BY country, addr) END AS fa_t
+        FROM rec r WHERE rid NOT IN (SELECT rid FROM rm)""")
+    cands = f"(SELECT * FROM read_parquet({lit(Path(work) / 'train' / 'cands.parquet')}) WHERE sid NOT IN (SELECT rid FROM rm) AND tid NOT IN (SELECT rid FROM rm))"
+    con.execute(GROUP_SQL.format(cands=cands))
+    con.execute("DELETE FROM gt WHERE sid IN (SELECT rid FROM rm) OR tid IN (SELECT rid FROM rm)")
+    validate_pairs(con, "c")
+    return {"plan": plan, "removed": removed}
 
 
 def _context(con, sid, tid, p1, anchor_where="TRUE", chunks=8, threads=1):
@@ -600,8 +650,10 @@ def model_path(work, name):
 
 
 def train(work, gt_path, n_train=300_000, hold_mod=22, mem="20GB", threads=None, seed=26, rounds=600,
-          chunks=8, leaves=127, lr=0.05, weight="none", backend="auto", model_dir="model"):
+          chunks=8, leaves=127, lr=0.05, weight="none", backend="auto", model_dir="model", density=False):
     """Fit classifiers and stacker, then evaluate disjoint tune/final reference groups.
+    density=True trains and evaluates under the test split's per-country reference/target density
+    (_thin_to_test_density), so competition features and the tuned threshold match test conditions.
 
     Stacker inputs use classifier-level cross-fitting. The learned lexicon uses
     non-hold references, so this is not full-pipeline cross-fitting. Every training
@@ -613,13 +665,13 @@ def train(work, gt_path, n_train=300_000, hold_mod=22, mem="20GB", threads=None,
     own = Path(tempfile.mkdtemp(prefix="fe_train_", dir=scratch(work)))
     try:
         return _train(work, gt_path, n_train, hold_mod, mem, threads, seed, rounds, chunks, leaves, lr,
-                      weight, backend, model_dir, own)
+                      weight, backend, model_dir, own, density)
     finally:
         shutil.rmtree(own, ignore_errors=True)
 
 
 def _train(work, gt_path, n_train, hold_mod, mem, threads, seed, rounds, chunks, leaves, lr, weight, backend,
-           model_dir, own):
+           model_dir, own, density=False):
     """Body of train(); `own` is the scratch directory for cached stage-1 matrices.
 
     Every training candidate (all references: fit groups A/B, holdout, others) is featurized exactly once,
@@ -643,6 +695,9 @@ def _train(work, gt_path, n_train, hold_mod, mem, threads, seed, rounds, chunks,
     lg = lambda msg: print(f"[train {time.time() - t0:.0f}s] {msg}", flush=True)  # noqa: E731
     con = _connect(work, "train", mem, threads)
     label_stats = _load_truth(con, gt_path)
+    dens = _thin_to_test_density(con, work, hold_mod) if density else None
+    if dens:
+        lg(f"test density: {dens}")
     # Disjoint S1 groups by a seeded hash of the entity id (never used as a feature).
     # Holdout = fixed hash rule shared with the lexicon step (which excludes these S1s).
     ab_salt = "ab" if seed == 26 else f"ab{seed}"
@@ -771,7 +826,8 @@ def _train(work, gt_path, n_train, hold_mod, mem, threads, seed, rounds, chunks,
     metrics = {"holdout_macro_f05": res["stage2"]["final_macro_f05"], "threshold": res["stage2"]["threshold"],
                "params": {"n_train": n_train, "rounds": rounds, "leaves": leaves, "lr": lr, "hold_mod": hold_mod,
                           "chunks": chunks, "seed": seed, "weight": weight, "backend": backend,
-                          "gpu": bool(backend == "xgb" and gpu_available())},
+                          "gpu": bool(backend == "xgb" and gpu_available()), "density": bool(density)},
+               "test_density": dens,
                "references_fit": {"A": int(counts["A"]), "B": int(counts["B"]),
                                   "stage2": int(sum(v for g, v in counts.items() if g != "hold"))},
                "candidate_filter": cand,

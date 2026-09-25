@@ -28,4 +28,6 @@ v17 features (India error analysis on v14's holdout): look-alike decoys at the s
 
 Stage-1 outputs (normalized records, lexicon, candidates) are now fingerprinted by exactly the modules stage 1 runs (integrity.STAGE1_CODE: prep, lexicon, block, db, integrity, validation, run_stage1); a test checks that none of them imports the matcher. Matcher/feature changes therefore reuse verified candidates instead of re-blocking (~1.5 h per run); model and prediction manifests still fingerprint every module.
 
-Final regression result: 100 tests passed; zero failures/errors.
+Leaderboard diagnosis (25 Sep): v12 0.954 at the holdout threshold 0.7 and 0.963 at 0.9; v15k 0.972 at 0.9 (holdout 0.98359). The test has ~19% fewer references per target in every country (0.174 vs 0.214) and a smaller US reference pool (663k vs 1.32M), while stage 1 relies mostly on target competition (t_rank 50%, t_rel 22% of gain): decoys whose owner is absent become top claimants. --match-test-density removes references per country (whole businesses and reference-only, deterministic hash, never holdout references) so reference/target counts match the test's, then rebuilds frequency and competition features; the holdout and its tuned threshold are then measured under test-like density. Uses only unlabeled test counts.
+
+Final regression result: 102 tests passed; zero failures/errors.
