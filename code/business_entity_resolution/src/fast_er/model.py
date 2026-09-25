@@ -601,7 +601,7 @@ def predict(work, split, out_dir, mem="20GB", threads=None, chunks=8, tmp=None):
           f"{time.time() - t0:.0f}s", flush=True)
 
 
-def write_outputs(con, scores_path, thr, out, chunks=16):
+def write_outputs(con, scores_path, thr, out, chunks=64):
     """Decision in DuckDB (p >= thr, then each target to its best S1) and stream both TSVs.
     Every S1 in `rec` gets exactly one row; lists may be empty. Aggregation runs in S1 chunks
     so memory stays bounded. Returns (links, S1 rows)."""
