@@ -58,7 +58,8 @@ FEATS = BASE + ["n_ratio", "n_tsort", "n_tset", "n_partial", "n_jw", "c_ratio", 
                 "c_exact", "a_ratio", "a_tsort", "a_tset", "a_partial", "t_addr_empty", "len_n_s", "len_n_t",
                 "len_a_s", "len_a_t", "num_jac", "num_common", "num_conflict", "num_first_eq", "s_num_cnt",
                 "t_num_cnt", "hn_ratio", "hn_rel", "raw_ratio", "raw_partial", "sup_core", "sup_addr"]
-CTX = ["p1", "p1_rank", "p1_max", "p1_sum", "p1_n05", "p1_rel", "p1_trank", "p1_tother", "p1_tdiff", "p1_tn05"]
+CTX = ["p1", "p1_rank", "p1_max", "p1_sum", "p1_n05", "p1_rel", "p1_trank", "p1_tother", "p1_tdiff", "p1_tn05",
+       "p1_srank", "p1_sn05", "p1_smax"]
 FEATS2 = FEATS + CTX
 
 CTX_SQL = """
@@ -71,8 +72,11 @@ SELECT sid, tid, p1,
   max(p1) OVER (PARTITION BY tid) AS tmax,
   nth_value(p1, 2) OVER (PARTITION BY tid ORDER BY p1 DESC, sid
                          ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS t2,
-  sum((p1 > 0.5)::INT) OVER (PARTITION BY tid) AS p1_tn05
-FROM p1tab
+  sum((p1 > 0.5)::INT) OVER (PARTITION BY tid) AS p1_tn05,
+  row_number() OVER (PARTITION BY sid, r.src ORDER BY p1 DESC, tid) AS p1_srank,
+  sum((p1 > 0.5)::INT) OVER (PARTITION BY sid, r.src) AS p1_sn05,
+  max(p1) OVER (PARTITION BY sid, r.src) AS p1_smax
+FROM p1tab JOIN rec r ON r.rid = p1tab.tid
 """
 
 
@@ -166,7 +170,8 @@ def _ctx_matrix(con, keys):
     m = con.execute("""
         SELECT x.p1, x.p1_rank, x.p1_max, x.p1_sum, x.p1_n05, x.p1 / x.p1_max AS p1_rel, x.p1_trank,
                CASE WHEN x.p1_trank = 1 THEN coalesce(x.t2, 0) ELSE x.tmax END AS p1_tother,
-               x.p1 - CASE WHEN x.p1_trank = 1 THEN coalesce(x.t2, 0) ELSE x.tmax END AS p1_tdiff, x.p1_tn05
+               x.p1 - CASE WHEN x.p1_trank = 1 THEN coalesce(x.t2, 0) ELSE x.tmax END AS p1_tdiff, x.p1_tn05,
+               x.p1_srank, x.p1_sn05, x.p1_smax
         FROM k JOIN ctx x USING (sid, tid) ORDER BY k.ix""").fetchnumpy()
     con.unregister("k")
     return np.column_stack([m[c].astype(np.float32) for c in CTX])
