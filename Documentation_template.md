@@ -26,7 +26,10 @@ Keys per record, namespaced by country (open set, France included): name tokens,
 (catch @handles/domains), whole core name, **name-token × address-word** composites ("pioneerinfotech|pune": keeps
 generic names blockable within their city), address tokens and bigrams. Keys held by >300 targets are dropped (1,000
 for whole names). Pairs are scored by summed idf; per reference we keep top-40 overall ∪ top-20 by name ∪ top-20 by
-address (≈49 candidates). **Full-train link recall 97.05%, perfect-matcher ceiling F0.5 0.9905.**
+address (≈49 candidates; full-train link recall 97.05%). **Learned filter:** a first-stage classifier on cheap
+name/address similarities keeps pairs with probability ≥ 0.01, leaving **≈3.9 candidates per reference** (true links
+average 3.45) while dropping 0.08% of true links and no predicted link (v12 holdout). Only these pairs reach the final
+matcher, and `candidate_pairs.tsv` lists exactly them.
 
 ## 4. Matching Model
 **Features (≈50):** RapidFuzz ratio / token-sort / token-set / partial / Jaro-Winkler on name, core name, raw joined

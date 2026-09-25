@@ -1054,6 +1054,7 @@ _score_all(con, models, m2, threads, chunks, tmp_parent)
 ```
 
 Score the complete graph using the production pipeline and run-owned disk caches.
+Returns only the pairs kept by the learned candidate filter (the matcher's inputs).
 
 ### `evaluate_threshold`
 
@@ -1096,7 +1097,7 @@ Body of train(); `own` is the scratch directory for cached stage-1 matrices.
 Every training candidate (all references: fit groups A/B, holdout, others) is featurized exactly once,
 one sid-slice at a time; matrices live on disk and boosters read them block by block. n_train sets the
 stage-1 references (A + B; above the non-holdout count means all); stage 2 always learns from every
-non-holdout reference, with easy negatives sampled (EASY_P / EASY_KEEP).
+non-holdout reference. Pairs below the learned candidate filter (CAND_P) never reach stage 2.
 
 ### `load_models`
 

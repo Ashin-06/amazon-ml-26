@@ -186,6 +186,22 @@ def test_cached_training_scores_equal_full_refeaturization(completed_pipeline):
     assert not list((root/'work').glob('fe_train_*'))  # scratch removed
 
 
+def test_candidate_filter_exports_exactly_the_matcher_inputs(completed_pipeline, monkeypatch):
+    """A higher filter keeps fewer candidates; candidate_pairs.tsv == scored pairs, and matches are a subset."""
+    root = completed_pipeline
+    full = pd.read_parquet(root/'out/scores.parquet')
+    monkeypatch.setattr(model, "CAND_P", float(full.p1.median()))
+    model.predict(root/'work', 'test', root/'filtered', mem='512MB', threads=1, chunks=7)
+    scores = pd.read_parquet(root/'filtered/scores.parquet')
+    assert 0 < len(scores) < len(full) and (scores.p1 >= model.CAND_P).all()
+    read = lambda n: pd.read_csv(root/'filtered'/n, sep='\t', dtype=str, keep_default_na=False)
+    cand, match = read('candidate_pairs.tsv'), read('matching_results.tsv')
+    pairs = {(s, t) for s, ids in zip(cand.source1_entity_id, cand.candidate_entity_ids) for t in ids.split(',') if ids}
+    assert len(pairs) == len(scores)
+    for s, ids in zip(match.source1_entity_id, match.matched_entity_ids):
+        assert all((s, t) in pairs for t in ids.split(',') if ids)
+
+
 def test_completed_cache_reuse_requires_exact_inputs(completed_pipeline):
     root = completed_pipeline
     settings = args(root/'pq', root/'work','train')

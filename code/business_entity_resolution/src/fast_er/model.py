@@ -71,10 +71,11 @@ CTX = ["p1", "p1_rank", "p1_max", "p1_sum", "p1_n05", "p1_rel", "p1_trank", "p1_
        "p1_srank", "p1_sn05", "p1_smax", "anc_name", "anc_core", "anc_addr", "anc_n"]
 FEATS2 = FEATS + CTX
 ANCHOR_P, ANCHOR_K, ANCHOR_MIN = 0.3, 4, 0.02
-# Stage 2 trains on every non-holdout reference. Negatives the stage-1 models already score below EASY_P
-# (~91% of candidates, holding <0.01% of true links) are sampled at EASY_KEEP with weight 1/EASY_KEEP, so
-# the training matrix fits a 6 GB GPU while the loss stays unbiased.
-EASY_P, EASY_KEEP = 0.001, 0.1
+# Learned candidate filter = last candidate-generation step. Blocking keeps ~49 targets per reference; the
+# stage-1 classifier then drops pairs with p1 < CAND_P. Measured on v12's 100k holdout: 48.7 -> 3.9 candidates
+# per reference, 278 of 347,987 true links (0.08%) dropped, no predicted link lost. Only kept pairs reach the
+# matcher (stage 2) in training, evaluation and inference, and candidate_pairs.tsv lists exactly them.
+CAND_P = 0.01
 
 CTX_SQL = """
 SELECT sid, tid, p1,
@@ -554,26 +555,31 @@ def _load_truth(con, gt_path):
 
 
 def _score_all(con, models, m2, threads, chunks, tmp_parent):
-    """Score the complete graph using the production pipeline and run-owned disk caches."""
+    """Score the complete graph using the production pipeline and run-owned disk caches.
+    Returns only the pairs kept by the learned candidate filter (the matcher's inputs)."""
     Path(tmp_parent).mkdir(parents=True, exist_ok=True)
     own = Path(tempfile.mkdtemp(prefix="fe_", dir=tmp_parent))
     try:
         keys, p1 = _predict_stage1(con, models, "TRUE", threads, chunks, tmp=own, tag="x")
-        _context(con, keys.sid.values, keys.tid.values, p1, chunks=chunks, threads=threads)
+        keep = p1 >= CAND_P  # learned candidate filter: only these pairs reach the matcher
+        kept = keys[keep].reset_index(drop=True)
+        _context(con, kept.sid.values, kept.tid.values, p1[keep], chunks=chunks, threads=threads)
         p2, off = [], 0
         for k in range(chunks):
             path = own / f"x{k}.npy"
             if not path.exists():
                 continue
             X = np.load(path, allow_pickle=False)
-            kk = keys.iloc[off:off + len(X)]
+            s = keep[off:off + len(X)]
+            kk = keys.iloc[off:off + len(X)][s]
             off += len(X)
-            p2.append(_pred(m2, np.hstack([X, _ctx_matrix(con, kk)]), threads))
+            if s.any():
+                p2.append(_pred(m2, np.hstack([X[s], _ctx_matrix(con, kk)]), threads))
         if off != len(keys):
             raise ValueError("Stage-2 candidate coverage mismatch")
         p2 = np.concatenate(p2) if p2 else np.empty(0)
         check_scores(p2)
-        return keys, p1, p2
+        return kept, p1[keep], p2
     finally:
         shutil.rmtree(own)
 
@@ -632,7 +638,7 @@ def _train(work, gt_path, n_train, hold_mod, mem, threads, seed, rounds, chunks,
     Every training candidate (all references: fit groups A/B, holdout, others) is featurized exactly once,
     one sid-slice at a time; matrices live on disk and boosters read them block by block. n_train sets the
     stage-1 references (A + B; above the non-holdout count means all); stage 2 always learns from every
-    non-holdout reference, with easy negatives sampled (EASY_P / EASY_KEEP)."""
+    non-holdout reference. Pairs below the learned candidate filter (CAND_P) never reach stage 2."""
     _check_args(n_train, hold_mod, chunks, rounds)
     P = _params(threads, seed, leaves, lr)
     if weight not in ("none", "ref", "sqrt"):
@@ -719,19 +725,14 @@ def _train(work, gt_path, n_train, hold_mod, mem, threads, seed, rounds, chunks,
     del X, pa, pb
     np.save(own / "p1p.npy", p1p)
     del p1p
-    # Complete lists, so per-reference support and target competition equal the production definitions.
-    _context(con, sid, tid, p1, chunks=chunks, threads=threads)
-    # Stage 2: every non-holdout reference (A/B with out-of-fold p1, the rest with the production mean);
-    # trivially easy negatives are sampled (deterministic, seeded) and up-weighted.
-    fit2 = grp != 2
+    # Candidate filter, then stage-2 context over the kept candidates only (training rows: out-of-fold p1).
+    # Stage 2 learns from every non-holdout reference: A/B with out-of-fold p1, the rest with the production mean.
+    kt = p1 >= CAND_P
+    _context(con, sid[kt], tid[kt], p1[kt], chunks=chunks, threads=threads)
+    fit2 = (grp != 2) & kt
     w2 = pair_weights(sid[fit2], weight)
-    w2 = np.ones(int(fit2.sum()), np.float32) if w2 is None else w2
-    easy = (p1[fit2] < EASY_P) & (y[fit2] == 0)
-    kept = ~easy | (np.random.default_rng(seed).random(int(fit2.sum())) < EASY_KEEP)
-    w2 = (w2 * np.where(easy, 1 / EASY_KEEP, 1)).astype(np.float32)[kept]
-    fit2[np.flatnonzero(fit2)[~kept]] = False
-    lg(f"stage 2 rows: {int(fit2.sum()):,} ({int(easy.sum()):,} easy negatives sampled at {EASY_KEEP})")
-    del easy, kept, p1
+    lg(f"stage 2 rows: {int(fit2.sum()):,} of {int((grp != 2).sum()):,} non-holdout blocked pairs (p1 >= {CAND_P})")
+    del kt, p1
     ctx = {}
     for i in range(len(files)):
         s = fit2[bounds[i]:bounds[i + 1]]
@@ -746,21 +747,32 @@ def _train(work, gt_path, n_train, hold_mod, mem, threads, seed, rounds, chunks,
     for c in ctx.values():
         c.unlink()
     lg("stage-2 model fitted")
-    # One complete production pass: stage-2 scores compete only with stage-2 scores.
+    # One complete production pass: stage-2 scores compete only with stage-2 scores, on filtered candidates.
     p1 = np.load(own / "p1p.npy")
-    _context(con, sid, tid, p1, chunks=chunks, threads=threads)
-    p2 = np.empty(len(sid))
+    kp = p1 >= CAND_P
+    _context(con, sid[kp], tid[kp], p1[kp], chunks=chunks, threads=threads)
+    p2 = np.full(len(sid), np.nan)
     for i, f in enumerate(files):
         a, b = bounds[i], bounds[i + 1]
-        p2[a:b] = _pred(m2, np.hstack([np.load(f), _ctx_matrix(con, pd.DataFrame({"sid": sid[a:b], "tid": tid[a:b]}))]), threads)
+        s = kp[a:b]
+        if s.any():
+            keys = pd.DataFrame({"sid": sid[a:b][s], "tid": tid[a:b][s]})
+            p2[a:b][s] = _pred(m2, np.hstack([np.load(f)[s], _ctx_matrix(con, keys)]), threads)
+    hold_sids = con.execute("SELECT sid FROM split WHERE g = 'hold'").df().sid.tolist()
+    lab_hold = con.execute("SELECT sid, tid FROM gt WHERE sid IN (SELECT sid FROM split WHERE g = 'hold')").df()
+    hb = grp == 2
+    cand = {"p1_min": CAND_P, "hold_blocked_per_ref": int(hb.sum()) / len(hold_sids),
+            "hold_final_per_ref": int((hb & kp).sum()) / len(hold_sids),
+            "blocked_link_recall": int(y[hb].sum()) / max(len(lab_hold), 1),
+            "final_link_recall": int(y[hb & kp].sum()) / max(len(lab_hold), 1)}
+    lg(f"candidate filter: {cand}")
+    sid, tid, grp, y, p1, p2 = sid[kp], tid[kp], grp[kp], y[kp], p1[kp], p2[kp]
     check_scores(p1)
     check_scores(p2)
-    hold_sids = con.execute("SELECT sid FROM split WHERE g = 'hold'").df().sid.tolist()
     tune_set = set(con.execute(f"""SELECT r.rid FROM rec r JOIN split s ON s.sid = r.rid
         WHERE s.g='hold' AND md5_number_lower(r.entity_id || 'tune26') % 2 = 0""").df().rid)
     tune_sids = [s for s in hold_sids if s in tune_set]
     final_sids = [s for s in hold_sids if s not in tune_set]
-    lab_hold = con.execute("SELECT sid, tid FROM gt WHERE sid IN (SELECT sid FROM split WHERE g = 'hold')").df()
     truth = lab_hold.groupby("sid")["tid"].apply(set).to_dict()
     keep = p2 >= 0.1  # searched thresholds are all >= 0.18 and decide() drops lower scores first: exact
     result = evaluate_threshold(sid[keep], tid[keep], p2[keep], truth, tune_sids, final_sids)
@@ -768,14 +780,14 @@ def _train(work, gt_path, n_train, hold_mod, mem, threads, seed, rounds, chunks,
     hold = grp == 2
     hk = pd.DataFrame({"sid": sid[hold], "tid": tid[hold], "p_stage1": p1[hold], "p_stage2": p2[hold]})
     lg(f"HOLDOUT stage2: threshold={result['threshold']} final macro F0.5={result['final_macro_f05']:.5f}")
-    recall_ceiling = int(y[hold].sum()) / max(len(lab_hold), 1)
+    recall_ceiling = cand["final_link_recall"]
     metrics = {"holdout_macro_f05": res["stage2"]["final_macro_f05"], "threshold": res["stage2"]["threshold"],
                "params": {"n_train": n_train, "rounds": rounds, "leaves": leaves, "lr": lr, "hold_mod": hold_mod,
                           "chunks": chunks, "seed": seed, "weight": weight, "backend": backend,
                           "gpu": bool(backend == "xgb" and gpu_available())},
                "references_fit": {"A": int(counts["A"]), "B": int(counts["B"]),
                                   "stage2": int(sum(v for g, v in counts.items() if g != "hold"))},
-               "stage2_sampling": {"easy_p": EASY_P, "easy_keep": EASY_KEEP},
+               "candidate_filter": cand,
                "labels": label_stats, "stage2": res["stage2"],
                "evaluation": "One final evaluation; production scores/global ownership; competitor pool includes fitted references.",
                "cross_fit_scope": "classifier only; lexicon fitted on all non-hold references",
@@ -837,13 +849,19 @@ def predict(work, split, out_dir, mem="20GB", threads=None, chunks=8, tmp=None, 
     con = _connect(work, split, mem, threads)
     try:
         keys, p1, p2 = _score_all(con, m1, m2, threads, chunks, tmp or scratch(work))
+        blocked = con.execute("SELECT count(*) FROM c").fetchone()[0]
+        # The final candidate set = the filtered pairs the matcher scored; the writer checks exact coverage.
+        con.register("kept", keys[["sid", "tid"]])
+        con.execute("CREATE OR REPLACE TABLE c AS SELECT * FROM c SEMI JOIN kept USING (sid, tid)")
+        con.unregister("kept")
         out.mkdir(parents=True, exist_ok=False)
         scores = out / "scores.parquet"
         pd.DataFrame({"sid": keys.sid.values, "tid": keys.tid.values, "p1": p1, "p": p2}).to_parquet(scores, index=False)
         n_match, n_s1 = write_outputs(con, scores, thr, out)
         seal(out, "prediction_manifest.json", {"model": digest(model_path(work, model_dir) / "model_manifest.json"),
              "stage": verify_stage(work, split), "code": code_digest(), "threshold": thr,
-             "pairs": len(keys), "references": n_s1, "matches": n_match},
+             "pairs": len(keys), "blocked_pairs": blocked, "candidate_filter_p1": CAND_P,
+             "references": n_s1, "matches": n_match},
              ["scores.parquet", "matching_results.tsv", "candidate_pairs.tsv"])
         print(f"[predict {split}] wrote {n_s1:,} rows and {n_match:,} links", flush=True)
     finally:

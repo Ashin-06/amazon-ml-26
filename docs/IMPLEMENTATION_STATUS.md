@@ -22,4 +22,6 @@ GPU research (25 Sep, RTX 3060 6 GB, 14 CPU threads):
 - String similarity: a custom CUDA kernel (CuPy, bit-parallel LCS) reproduces fuzz.ratio exactly on 2.69M real name pairs, but end-to-end it is not faster: 0.61 s from Python strings, 0.40 s from Arrow buffers, vs 0.30 s for rapidfuzz (SIMD C++, ~9M pairs/s). Packing and moving strings dominate; a GPU-only pipeline (RAPIDS cuDF) is not available on Windows. Kept on CPU.
 - The real featurization bottleneck was Python loops; moving them into DuckDB SQL gave identical features at 1.76x speed (51k -> 90k pairs/s).
 
-Final regression result: 98 tests passed; zero failures/errors.
+Candidate set (organizer update: a smaller candidate_pairs.tsv per reference ranks higher): candidate generation now ends with a learned filter. Key blocking keeps ~49 targets per reference (link recall 97.05%); the stage-1 classifier drops pairs with p1 < 0.01. On v12's 100,652-reference holdout this leaves 3.92 candidates per reference (48.7 before), drops 278 of 347,987 true links (0.08%) and no predicted link. The matcher trains, scores and is evaluated only on kept pairs, and candidate_pairs.tsv lists exactly those pairs (test-checked). Seed ensembles now require members with identical filtered sets.
+
+Final regression result: 99 tests passed; zero failures/errors.
