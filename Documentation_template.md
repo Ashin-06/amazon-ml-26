@@ -1,5 +1,5 @@
 <!-- DRAFT: fill team fields and the final selected run's numbers before submission -->
-> Implementation remains a draft. The audit checkout has 50 pair and 17 context features, production-consistent global evaluation and verified seed ensembles. It has no measured full-data score yet; historical run results below must be replaced with the selected run's actual results before submission.
+> Implementation remains a draft. The v15 checkout has 52 pair and 17 context features, production-consistent global evaluation and verified seed ensembles. It has no measured full-data score yet; historical run results below must be replaced with the selected run's actual results before submission.
 
 # ML Challenge 2026: Business Entity Resolution Solution
 
@@ -7,7 +7,7 @@
 
 ## 1. Executive Summary
 Blocking + learned matcher, built only on the supplied data. Records are normalized (transliteration, abbreviation
-and state canonicalization, alias/phone cleanup) and a **transliteration lexicon learned from the training labels**
+and state canonicalization, alias/phone/OCR/ID-tag cleanup, domain-name splitting) and a **transliteration lexicon learned from the training labels**
 maps native-script Indian spellings to English. Candidates come from a bulk DuckDB join over hashed name, address and
 **name×address-word** keys. A **two-stage LightGBM** matcher scores pairs (stage 2 sees how each pair compares with
 competing candidates), each target is given to at most one reference, and the threshold maximizes macro F0.5.
@@ -17,8 +17,9 @@ competing candidates), each target is given to at most one reference, and the th
 3.5 per reference; 5.6% of references have none; no target belongs to two references and no link crosses countries.
 Main noise: legal-suffix/typo/reordering name variants, "Brand DBA Real Name" aliases (2.4% of Source-3 names),
 appended phone numbers, Indian names in Devanagari/Bengali/Kannada/Tamil (28% of India S2 names), abbreviated or
-reordered addresses, zero-padded house numbers, 3–4% missing target addresses, and very generic Indian names shared
-by hundreds of businesses. **Approach type:** blocking + two-stage gradient-boosted classifier + one-owner assignment.
+reordered addresses, zero-padded house numbers, 3–4% missing target addresses, very generic Indian names shared
+by hundreds of businesses, and target-only name noise: OCR digits inside words ("5ervices", "hea1th"; 2.6% of target
+names, ~0% of references), glued domains ("regionalcreativetowing.com"), "(ID: n)" tags and M/s/Sri/Smt/Mr/Dr prefixes. **Approach type:** blocking + two-stage gradient-boosted classifier + one-owner assignment.
 
 ## 3. Candidate Generation (Blocking)
 Keys per record, namespaced by country (open set, France included): name tokens, adjacent/whole-name concatenations
@@ -29,7 +30,7 @@ address (≈49 candidates). **Full-train link recall 97.05%, perfect-matcher cei
 
 ## 4. Matching Model
 **Features (≈50):** RapidFuzz ratio / token-sort / token-set / partial / Jaro-Winkler on name, core name, raw joined
-name and address; digit-token agreement and house-number similarity; missing-address flags; how many records share
+name and address; digit-token agreement, house-number similarity and delta (typo vs neighbouring number); missing-address flags; how many records share
 the exact name/address; blocking scores and ranks; cluster support (candidates sharing the same name/address).
 **Model:** LightGBM (MIT). Stage 1: two models on disjoint reference halves give out-of-fold probabilities. Stage 2 adds
 context: the pair's rank and share within its reference and within its source, and the best competing reference's
@@ -46,11 +47,14 @@ half, scored on the other (same protocol for all rows in the last column).
 | v2 | + learned lexicon, frequency features, two-stage context | 0.9203 / 0.9680 | 0.9535 | – |
 | v3 | + number/ordinal/French normalization, short-token and whole-name keys | 0.9329 / 0.9735 | 0.9578 | – |
 | v4 | + name×address keys, larger candidate budget, house-number, raw-name and cluster features | 0.9664 / 0.9890 | 0.9762 | 0.9758 |
-| v10 | + short-name composites, whole-name cap, alias & phone cleanup, per-source context, per-reference weights | 0.9705 / 0.9905 | [TBD] | [TBD] |
+| v10 | + short-name composites, whole-name cap, alias & phone cleanup, per-source context, per-reference weights | 0.9705 / 0.9905 | [TBD] | 0.9774 |
+| v15 | + target-name noise cleaning, domain splitting, house-number deltas (audit-hardened evaluation) | [pending] | [pending] | [pending] |
 
 Also tested: expected-F0.5 subset selection and separate thresholds per country or for the top candidate (no gain);
 per-reference sample weights (small gain on a pilot). **Errors:** misses dominate (≈9 missed links per false link);
-64% of missed links were never retrieved; nearly half of those have an empty target address (often a generic name). False links are mainly
+64% of missed links were never retrieved; nearly half of those have an empty target address (often a generic name).
+Exact-name links to empty-address targets are only resolvable when the name is unique (98% true) and fall to
+≈1/k when k references share it, so part of the 0.9905 ceiling is unreachable. False links are mainly
 a different business at the same or neighboring address. France has no labels: its predicted match rate (5.8% empty,
 3.4 links/reference) matches US/India.
 
