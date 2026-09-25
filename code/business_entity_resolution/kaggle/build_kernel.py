@@ -14,6 +14,7 @@ ap.add_argument("out"); ap.add_argument("owner"); ap.add_argument("slug"); ap.ad
 ap.add_argument("--s1", default=""); ap.add_argument("--s3", default=""); ap.add_argument("--reuse")
 ap.add_argument("--no-internet", action="store_true")
 ap.add_argument("--gpu", action="store_true")
+ap.add_argument("--dataset", help="OWNER/SLUG of the converted-input dataset (default OWNER/amlc26-data)")
 a = ap.parse_args()
 allowed = {"block_train","block_test","model","model_eval"}
 if not set(a.stages.split(",")) <= allowed or {"model","model_eval"} <= set(a.stages.split(",")):
@@ -95,7 +96,7 @@ out.mkdir(parents=True, exist_ok=False)
 (out / "script.py").write_text(body, encoding="utf-8")
 meta = {"id": f"{a.owner}/{a.slug}", "title": a.slug.replace("-", " "), "code_file": "script.py", "language": "python",
         "kernel_type": "script", "is_private": True, "enable_gpu": a.gpu, "enable_tpu": False,
-        "enable_internet": not a.no_internet, "dataset_sources": [f"{a.owner}/amlc26-data"], "competition_sources": [],
+        "enable_internet": not a.no_internet, "dataset_sources": [a.dataset or f"{a.owner}/amlc26-data"], "competition_sources": [],
         "kernel_sources": [a.reuse] if a.reuse else []}
 (out / "kernel-metadata.json").write_text(json.dumps(meta, indent=1), encoding="utf-8")
 print("built", out / "script.py", len(body), "bytes")
