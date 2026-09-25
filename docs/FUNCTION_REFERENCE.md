@@ -1140,7 +1140,7 @@ Resolve one model/ensemble subdirectory without allowing traversal or absolute p
 ### `train`
 
 ```python
-train(work, gt_path, n_train=10000, hold_mod=22, mem='4GB', threads=1, seed=26, rounds=600, chunks=8, leaves=127, lr=0.05, weight='none', backend='lgb', model_dir='model', stage2_all=False)
+train(work, gt_path, n_train=10000, hold_mod=22, mem='4GB', threads=1, seed=26, rounds=600, chunks=8, leaves=127, lr=0.05, weight='none', backend='lgb', model_dir='model', stage2_all=False, stage1_hard_rank=0, stage1_neg_keep=1.0)
 ```
 
 Fit classifiers and stacker, then evaluate disjoint tune/final reference groups.
@@ -1155,7 +1155,7 @@ Complete-graph context/evaluation still scans all candidates and needs measured 
 ### `_train`
 
 ```python
-_train(work, gt_path, n_train, hold_mod, mem, threads, seed, rounds, chunks, leaves, lr, weight, backend, model_dir, own, stage2_all=False)
+_train(work, gt_path, n_train, hold_mod, mem, threads, seed, rounds, chunks, leaves, lr, weight, backend, model_dir, own, stage2_all=False, stage1_hard_rank=0, stage1_neg_keep=1.0)
 ```
 
 Body of train(); `own` is the scratch directory for cached stage-1 matrices.

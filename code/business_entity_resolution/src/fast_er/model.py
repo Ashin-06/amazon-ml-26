@@ -635,7 +635,8 @@ def model_path(work, name):
 
 
 def train(work, gt_path, n_train=10_000, hold_mod=22, mem="4GB", threads=1, seed=26, rounds=600,
-          chunks=8, leaves=127, lr=0.05, weight="none", backend="lgb", model_dir="model", stage2_all=False):
+          chunks=8, leaves=127, lr=0.05, weight="none", backend="lgb", model_dir="model", stage2_all=False,
+          stage1_hard_rank=0, stage1_neg_keep=1.0):
     """Fit classifiers and stacker, then evaluate disjoint tune/final reference groups.
 
     Stacker inputs use classifier-level cross-fitting. The learned lexicon uses
@@ -649,13 +650,13 @@ def train(work, gt_path, n_train=10_000, hold_mod=22, mem="4GB", threads=1, seed
     own = Path(tempfile.mkdtemp(prefix="fe_train_", dir=scratch(work)))
     try:
         return _train(work, gt_path, n_train, hold_mod, mem, threads, seed, rounds, chunks, leaves, lr,
-                      weight, backend, model_dir, own, stage2_all)
+                      weight, backend, model_dir, own, stage2_all, stage1_hard_rank, stage1_neg_keep)
     finally:
         shutil.rmtree(own, ignore_errors=True)
 
 
 def _train(work, gt_path, n_train, hold_mod, mem, threads, seed, rounds, chunks, leaves, lr, weight, backend,
-           model_dir, own, stage2_all=False):
+           model_dir, own, stage2_all=False, stage1_hard_rank=0, stage1_neg_keep=1.0):
     """Body of train(); `own` is the scratch directory for cached stage-1 matrices.
 
     Every training candidate (all references: fit groups A/B, holdout, others) is featurized exactly once,
@@ -696,7 +697,9 @@ def _train(work, gt_path, n_train, hold_mod, mem, threads, seed, rounds, chunks,
     group_of = pd.Series(code.c.to_numpy(np.int8), index=code.sid.to_numpy())
     del code
     # One featurization pass over every candidate (group 0 = A, 1 = B, 2 = holdout, 3 = other references).
-    sids, tids, grps, ys, files = [], [], [], [], []
+    if not (0 < stage1_neg_keep <= 1) or type(stage1_hard_rank) is not int or stage1_hard_rank < 0:
+        raise ValueError("stage1_neg_keep must be in (0, 1] and stage1_hard_rank a nonnegative int")
+    sids, tids, grps, ys, files, rss = [], [], [], [], [], []
     for k in range(chunks):  # one sid-slice of text rows in memory at a time
         df = _pairs(con, f"c.sid % {chunks} = {k}")
         if not len(df):
@@ -704,6 +707,7 @@ def _train(work, gt_path, n_train, hold_mod, mem, threads, seed, rounds, chunks,
         path = own / f"x{k}.npy"
         np.save(path, features(df, threads))
         kk = df[["sid", "tid"]].reset_index(drop=True)
+        rss.append(np.minimum(df["r_s"].to_numpy(np.float64), 32767).astype(np.int16))  # blocking-score rank
         del df
         lab = con.execute(f"SELECT sid, tid, 1::TINYINT AS y FROM gt WHERE sid % {chunks} = {k}").df()
         sids.append(kk.sid.to_numpy(np.int32)); tids.append(kk.tid.to_numpy(np.int32))
@@ -711,8 +715,8 @@ def _train(work, gt_path, n_train, hold_mod, mem, threads, seed, rounds, chunks,
         ys.append(kk.merge(lab, on=["sid", "tid"], how="left").y.fillna(0).to_numpy(np.int8))
         files.append(path)
         lg(f"features {k + 1}/{chunks}: {len(kk):,} pairs")
-    sid, tid, grp, y = (np.concatenate(v) for v in (sids, tids, grps, ys))
-    del sids, tids, grps, ys
+    sid, tid, grp, y, rs = (np.concatenate(v) for v in (sids, tids, grps, ys, rss))
+    del sids, tids, grps, ys, rss
     bounds = np.cumsum([0] + [np.load(f, mmap_mode="r").shape[0] for f in files])
     if bounds[-1] != len(sid) or len(sid) != con.execute("SELECT count(*) FROM c").fetchone()[0]:
         raise ValueError("Featurized rows must cover every candidate exactly once")
@@ -733,9 +737,22 @@ def _train(work, gt_path, n_train, hold_mod, mem, threads, seed, rounds, chunks,
         return out
 
     m = {}
+    rng = np.random.default_rng(seed)
+    s1_rows = {}
     for i, name in enumerate(("A", "B")):
         sel = grp == i
-        m[name] = _fit_parts(backend, P, loaders(sel), y[sel], pair_weights(sid[sel], weight), FEATS, rounds)
+        w = pair_weights(sid[sel], weight)
+        if stage1_neg_keep < 1:  # all true links + hard candidates; easy negatives sampled, weight 1/keep
+            idx = np.flatnonzero(sel)
+            hard = (y[idx] == 1) | (rs[idx] <= stage1_hard_rank)
+            kept = hard | (rng.random(idx.size, dtype=np.float32) < stage1_neg_keep)
+            w = (np.ones(idx.size, np.float32) if w is None else w) * np.where(hard, 1.0, 1.0 / stage1_neg_keep)
+            w = w[kept].astype(np.float32)
+            sel = np.zeros(len(sid), bool); sel[idx[kept]] = True
+            del idx, hard, kept
+        s1_rows[name] = int(sel.sum())
+        m[name] = _fit_parts(backend, P, loaders(sel), y[sel], w, FEATS, rounds)
+    lg(f"stage-1 training rows: {s1_rows}")
     lg("stage-1 models fitted")
     # p1: out-of-fold for A/B (training context); production p1 = mean of both models for every row.
     p1 = np.empty(len(sid)); p1p = np.empty(len(sid))
@@ -811,7 +828,9 @@ def _train(work, gt_path, n_train, hold_mod, mem, threads, seed, rounds, chunks,
                "params": {"n_train": n_train, "rounds": rounds, "leaves": leaves, "lr": lr, "hold_mod": hold_mod,
                           "chunks": chunks, "seed": seed, "weight": weight, "backend": backend,
                           "gpu": any(d.startswith("cuda") for d in devices.values()),
-                          "devices": devices, "stage2_all": stage2_all},
+                          "devices": devices, "stage2_all": stage2_all,
+                          "stage1_hard_rank": stage1_hard_rank, "stage1_neg_keep": stage1_neg_keep},
+               "stage1_training_rows": s1_rows,
                "references_fit": {"A": int(counts["A"]), "B": int(counts["B"]),
                                   "stage2": int(np.unique(sid[fit2]).size)},
                "candidate_filter": cand,

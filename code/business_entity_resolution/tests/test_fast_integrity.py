@@ -421,3 +421,17 @@ def test_stage1_fingerprint_covers_exactly_the_code_stage1_runs():
             assert all(m + ".py" in integrity.STAGE1_CODE or m in ("", "fast_er") for m in local), (name, mods)
     assert integrity.code_digest(integrity.STAGE1_CODE) != integrity.code_digest()
     assert "model.py" not in integrity.STAGE1_CODE and "run_stage1.py" in integrity.STAGE1_CODE
+
+
+
+def test_stage1_negative_sampling_keeps_positives_and_hard_candidates(completed_pipeline):
+    root = completed_pipeline
+    m = model.train(root/'work', root/'pq/train_ground_truth.parquet', n_train=70, hold_mod=4, backend='lgb',
+                    mem='512MB', threads=1, rounds=3, chunks=7, leaves=7, model_dir='model_s1sample',
+                    stage1_hard_rank=1, stage1_neg_keep=0.5)
+    full = json.loads((root/'work/model/metrics.json').read_text())
+    assert m["params"]["stage1_neg_keep"] == 0.5 and m["params"]["stage1_hard_rank"] == 1
+    assert 0 < m["stage1_training_rows"]["A"] and m["holdout_s1"] == full["holdout_s1"]
+    with pytest.raises(ValueError):
+        model.train(root/'work', root/'pq/train_ground_truth.parquet', n_train=70, hold_mod=4, backend='lgb',
+                    mem='512MB', threads=1, rounds=3, chunks=7, leaves=7, model_dir='model_bad', stage1_neg_keep=0)

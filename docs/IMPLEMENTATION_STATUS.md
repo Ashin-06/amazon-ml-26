@@ -31,3 +31,6 @@ v17 features (India error analysis on v14's holdout): look-alike decoys at the s
 Stage-1 outputs (normalized records, lexicon, candidates) are now fingerprinted by exactly the modules stage 1 runs (integrity.STAGE1_CODE: prep, lexicon, block, db, integrity, validation, run_stage1); a test checks that none of them imports the matcher. Matcher/feature changes therefore reuse verified candidates instead of re-blocking (~1.5 h per run); model and prediction manifests still fingerprint every module.
 
 Final regression result: 100 tests passed; zero failures/errors.
+
+
+v19 (branch fix/v19): audited compliant pipeline 9cb1200 + v17c decoy/house-number features + stage-1-scoped fingerprints + stage-1 training on every reference within GPU memory (--stage1-hard-rank / --stage1-neg-keep: all true links and every candidate within the top blocking-score ranks kept, other negatives sampled with weight 1/keep; scoring still covers every candidate). 110 tests passed.

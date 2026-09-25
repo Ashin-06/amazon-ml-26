@@ -23,12 +23,17 @@ if __name__ == "__main__":
                     help="auto = XGBoost on GPU when one is usable (CPU retry on GPU OOM), else LightGBM on CPU")
     ap.add_argument("--seed", type=int, default=26)
     ap.add_argument("--model-dir", default="model")
+    ap.add_argument("--stage1-hard-rank", type=int, default=0,
+                    help="stage-1 training keeps every candidate within this blocking-score rank (with --stage1-neg-keep)")
+    ap.add_argument("--stage1-neg-keep", type=float, default=1.0,
+                    help="stage-1 training keeps this share of the other negatives, weighted 1/share (1 = all)")
     ap.add_argument("--stage2-all-references", action="store_true",
                     help="Explicitly expand stage-2 fitting beyond the --n-train reference sample")
     a = ap.parse_args()
     if not a.skip_train:
         train(a.work, a.gt, a.n_train, a.hold_mod, a.mem, a.threads, rounds=a.rounds, leaves=a.leaves, lr=a.lr,
               chunks=a.chunks, weight=a.weight, backend=a.backend, seed=a.seed, model_dir=a.model_dir,
-              stage2_all=a.stage2_all_references)
+              stage2_all=a.stage2_all_references, stage1_hard_rank=a.stage1_hard_rank,
+              stage1_neg_keep=a.stage1_neg_keep)
     if not a.skip_predict:
         predict(a.work, a.pred_split, a.out, a.mem, a.threads, chunks=a.chunks, model_dir=a.model_dir)
