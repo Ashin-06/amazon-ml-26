@@ -28,6 +28,8 @@ def test_clean_name_phone_and_alias():
     assert clean_name("Veowex a/k/a Sbs & Brothers Private Limited") == "Sbs & Brothers Private Limited"
     assert clean_name("Zetatavo DBA Surya It Pvt Ltd") == "Surya It Pvt Ltd"
     assert clean_name("Kaka Traders") == "Kaka Traders"  # 'aka' inside a word is not a marker
+    assert clean_name("Ciraveo née Dunkerque Musique SAS") == "Dunkerque Musique SAS"
+    assert clean_name("NEE College SAS") == "NEE College SAS"  # French marker needs a preceding brand
     assert clean_name(None) is None
 
 

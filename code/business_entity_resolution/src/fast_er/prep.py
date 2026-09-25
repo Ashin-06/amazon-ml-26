@@ -116,13 +116,19 @@ PHONE = re.compile(r"[\s\-]*\+?\d[\d\- ]{6,}\d")
 ALIAS = re.compile(r"(?i)(?<![A-Za-z0-9])(?:a/k/a|aka|d/b/a|dba|trading as|t/a|also known as|formerly|doing business as|operating as)(?=\W)[:\s]*")
 
 
+FR_ALIAS = re.compile(r"(?i)(?<![A-Za-z0-9])(?:n[ée]e|anciennement)(?=\W)[:\s]*")
+
+
 def clean_name(text):
     """Drop appended phone numbers; for 'Brand DBA Real Name' keep the part after the alias marker."""
     if not isinstance(text, str) or not text:
         return text
     text = PHONE.sub(" ", text)
     parts = ALIAS.split(text, maxsplit=1)
-    return parts[1] if len(parts) == 2 and parts[1].strip() else text
+    if len(parts) == 2 and parts[1].strip():
+        return parts[1]
+    parts = FR_ALIAS.split(text, maxsplit=1)  # French "X née Y": only when something precedes the marker
+    return parts[1] if len(parts) == 2 and parts[0].strip() and parts[1].strip() else text
 
 
 def _chunk(cols):
