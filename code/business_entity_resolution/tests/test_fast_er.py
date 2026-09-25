@@ -201,3 +201,8 @@ def test_sql_pair_features_match_python_definitions():
     np.testing.assert_array_equal(col("t_addr_empty"), (df.taddr == "").to_numpy())
     np.testing.assert_array_equal(col("len_a_t"), df.taddr.str.len().to_numpy())
     assert col("sup_addr")[(df.taddr == "").to_numpy()].tolist() == [-1]
+    by = {int(r): i for i, r in enumerate(df.tid)}
+    assert col("ft_lev")[by[2]] == 0 and col("ft_pre")[by[2]] == 1 and col("ft_suf")[by[2]] == 1  # acme / acme
+    assert col("ft_lev")[by[5]] == 4 and col("ft_pre")[by[5]] == 0  # acme vs x
+    assert col("hn_in_t")[by[4]] == 1 and col("hn_t_in_s")[by[4]] == 0  # 353 in [0353, 353]; 0353 not in [353, 60601]
+    assert col("hn_in_t")[by[3]] == -1  # empty target address
