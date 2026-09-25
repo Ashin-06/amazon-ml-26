@@ -16,4 +16,10 @@ v15 (branch fix/v15): France region mapping scoped to country = France; phonetic
 
 Error floor (v10 holdout): exact-name matches to empty-address targets are ambiguous when several references share the name (true-link rate 0.98 when the name is unique, 0.54 / 0.30 / 0.15 / 0.04 when 2 / 3-5 / 6-20 / >20 references share it), so part of the 0.9905 oracle is not reachable by any matcher.
 
-Final regression result: 97 tests passed; zero failures/errors.
+GPU research (25 Sep, RTX 3060 6 GB, 14 CPU threads):
+- Model training/prediction: GPU-resident XGBoost 0.18 s/round vs CPU 0.71 s/round (8M rows); used.
+- XGBoost external memory (data in RAM, GPU compute): 13.4 s/round on Windows (no RMM/HMM support); unusable.
+- String similarity: a custom CUDA kernel (CuPy, bit-parallel LCS) reproduces fuzz.ratio exactly on 2.69M real name pairs, but end-to-end it is not faster: 0.61 s from Python strings, 0.40 s from Arrow buffers, vs 0.30 s for rapidfuzz (SIMD C++, ~9M pairs/s). Packing and moving strings dominate; a GPU-only pipeline (RAPIDS cuDF) is not available on Windows. Kept on CPU.
+- The real featurization bottleneck was Python loops; moving them into DuckDB SQL gave identical features at 1.76x speed (51k -> 90k pairs/s).
+
+Final regression result: 98 tests passed; zero failures/errors.
