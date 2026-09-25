@@ -173,3 +173,31 @@ def test_house_number_delta_features():
     f = _num_feats(["353 oak st", "1234 elm st", "9 pine rd"], ["355 oak st", "1334 elm st", "pine rd"])
     assert f[0, 8] > 0 and f[0, 9] == 1.0 and f[1, 9] == 1.0  # 353/355 and 1234/1334: one digit differs
     assert abs(f[1, 8] - np.log1p(100)) < 1e-5 and f[2, 8] == -1 and f[2, 9] == -1
+
+
+def test_sql_pair_features_match_python_definitions():
+    """_pairs computes counts/lengths/digit tokens in SQL; features() must equal the reference Python formulas."""
+    from fast_er import model
+    con = duckdb.connect()
+    recs = [(0, 1, "acme dental", "acme dental", "353 oak st 60601"), (1, 2, "acme dental", "acme dental", "355 oak st 60601"),
+            (2, 3, "acme dent", "acme dent", "1234 elm st"), (3, 2, "zed", "zed", ""), (4, 3, "acme dental", "acme dental", "0353 oak st 353"),
+            (5, 2, "x co", "x", "12 12 main 7"), (6, 3, "acme dental", "acme dental", "353 oak st 60601")]
+    con.execute("CREATE TABLE rec (rid INTEGER, src TINYINT, name VARCHAR, core VARCHAR, addr VARCHAR)")
+    con.executemany("INSERT INTO rec VALUES (?, ?, ?, ?, ?)", recs)
+    con.execute("""CREATE TABLE rec2 AS SELECT *, name AS rawn, core AS skel, regexp_extract_all(addr, '[0-9]+') AS nums,
+                   1 AS fc_t, 1 AS fc_s, 1 AS fa_t FROM rec""")
+    con.execute("DROP TABLE rec; ALTER TABLE rec2 RENAME TO rec")
+    base = ", ".join(f"0.0 AS {b}" for b in model.BASE if b not in ("tsrc", "s_fct", "s_fcs", "s_fat", "t_fct", "t_fcs", "t_fat"))
+    con.execute(f"CREATE TABLE c AS SELECT 0 AS sid, rid AS tid, {base} FROM rec WHERE rid > 0")
+    df = model._pairs(con, "TRUE")
+    F = model.features(df)
+    col = lambda k: F[:, model.FEATS.index(k)]
+    ref = model._num_feats(df.saddr.tolist(), df.taddr.tolist())
+    for j, k in enumerate(["num_jac", "num_common", "num_conflict", "num_first_eq", "s_num_cnt", "t_num_cnt",
+                           "hn_ratio", "hn_rel", "hn_logdiff", "hn_sub1"]):
+        np.testing.assert_allclose(col(k), ref[:, j], atol=1e-6, err_msg=k)
+    np.testing.assert_array_equal(col("sup_core"), df.groupby(["sid", "tcore"]).sid.transform("size").to_numpy())
+    np.testing.assert_array_equal(col("c_exact"), (df.scor == df.tcore).to_numpy())
+    np.testing.assert_array_equal(col("t_addr_empty"), (df.taddr == "").to_numpy())
+    np.testing.assert_array_equal(col("len_a_t"), df.taddr.str.len().to_numpy())
+    assert col("sup_addr")[(df.taddr == "").to_numpy()].tolist() == [-1]

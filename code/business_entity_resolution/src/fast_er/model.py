@@ -124,27 +124,35 @@ def features(df, threads=1):
                 n_tset=d(sn, tn, fuzz.token_set_ratio), n_partial=d(sn, tn, fuzz.partial_ratio),
                 n_jw=d(sn, tn, JaroWinkler.normalized_similarity), c_ratio=d(sc, tc, fuzz.ratio),
                 c_tset=d(sc, tc, fuzz.token_set_ratio),
-                c_nospace=d([x.replace(" ", "") for x in sc], [x.replace(" ", "") for x in tc], fuzz.ratio),
+                c_nospace=d(df["scor_ns"].tolist(), df["tcor_ns"].tolist(), fuzz.ratio),
                 a_ratio=d(sa, ta, fuzz.ratio), a_tsort=d(sa, ta, fuzz.token_sort_ratio),
                 a_tset=d(sa, ta, fuzz.token_set_ratio), a_partial=d(sa, ta, fuzz.partial_ratio))
-    cols["c_exact"] = np.fromiter((x == y for x, y in zip(sc, tc)), np.float32, len(sc))
     rs, rt = df["srawn"].tolist(), df["trawn"].tolist()
     cols.update(raw_ratio=d(rs, rt, fuzz.ratio), raw_partial=d(rs, rt, fuzz.partial_ratio))
     ks, kt = df["sskel"].tolist(), df["tskel"].tolist()
     skel = d(ks, kt, fuzz.ratio)
     skel[(df["sskel"].to_numpy() == "") | (df["tskel"].to_numpy() == "")] = -1
     cols["skel_ratio"] = skel
-    # Cluster support: true matches come in groups of near-identical variants; decoys stand alone.
-    cols["sup_core"] = df.groupby(["sid", "tcore"]).sid.transform("size").to_numpy(np.float32)
-    sup_a = df.groupby(["sid", "taddr"]).sid.transform("size").to_numpy(np.float32)
-    cols["sup_addr"] = np.where(df["taddr"].to_numpy() == "", -1, sup_a).astype(np.float32)
-    cols["t_addr_empty"] = np.fromiter((not x for x in ta), np.float32, len(ta))
-    for k, v in (("len_n_s", sn), ("len_n_t", tn), ("len_a_s", sa), ("len_a_t", ta)):
-        cols[k] = np.fromiter(map(len, v), np.float32, len(v))
-    nf = _num_feats(sa, ta)
-    for j, k in enumerate(["num_jac", "num_common", "num_conflict", "num_first_eq", "s_num_cnt", "t_num_cnt",
-                           "hn_ratio", "hn_rel", "hn_logdiff", "hn_sub1"]):
-        cols[k] = nf[:, j]
+    # Computed in SQL (_pairs): exact core, empty target address, lengths, cluster support
+    # (true matches come in groups of near-identical variants; decoys stand alone), digit-token counts.
+    for k in ("c_exact", "t_addr_empty", "len_n_s", "len_n_t", "len_a_s", "len_a_t", "sup_core", "sup_addr",
+              "num_common", "s_num_cnt", "t_num_cnt"):
+        cols[k] = df[k].to_numpy(np.float32)
+    # Digit tokens: set agreement; hn_* compare the first number (house/plot number): typo vs neighbour.
+    sd, td, inter = df["s_nd"].to_numpy(np.float64), df["t_nd"].to_numpy(np.float64), cols["num_common"]
+    both = (sd > 0) & (td > 0)
+    cols["num_jac"] = np.where(both, inter / np.maximum(sd + td - inter, 1), -1).astype(np.float32)
+    cols["num_conflict"] = (both & (inter == 0)).astype(np.float32)
+    shn, thn = df["s_hn"].to_numpy(object), df["t_hn"].to_numpy(object)
+    has = (shn != "") & (thn != "")
+    cols["num_first_eq"] = (has & (shn == thn)).astype(np.float32)
+    cols["hn_ratio"] = np.where(has, d(df["s_hn"].tolist(), df["t_hn"].tolist(), fuzz.ratio) / 100, -1).astype(np.float32)
+    sv = pd.to_numeric(df["s_hv"]).to_numpy(np.float64, na_value=0)
+    tv = pd.to_numeric(df["t_hv"]).to_numpy(np.float64, na_value=0)
+    diff = np.abs(sv - tv)
+    cols["hn_rel"] = np.where(has, diff / np.maximum(np.maximum(sv, tv), 1), -1).astype(np.float32)
+    cols["hn_logdiff"] = np.where(has, np.log1p(diff), -1).astype(np.float32)
+    cols["hn_sub1"] = np.where(has, df["hn_one"].to_numpy(bool), -1).astype(np.float32)
     return np.column_stack([cols[c] for c in FEATS])
 
 
@@ -154,7 +162,20 @@ def _pairs(con, where):
         SELECT c.*, a.name AS sname, a.core AS scor, a.addr AS saddr, a.rawn AS srawn, a.skel AS sskel,
                b.name AS tname, b.core AS tcore, b.addr AS taddr, b.src AS tsrc, b.rawn AS trawn, b.skel AS tskel,
                a.fc_t AS s_fct, a.fc_s AS s_fcs, a.fa_t AS s_fat,
-               b.fc_t AS t_fct, b.fc_s AS t_fcs, b.fa_t AS t_fat
+               b.fc_t AS t_fct, b.fc_s AS t_fcs, b.fa_t AS t_fat,
+               (a.core = b.core)::FLOAT AS c_exact, (b.addr = '')::FLOAT AS t_addr_empty,
+               length(a.name)::FLOAT AS len_n_s, length(b.name)::FLOAT AS len_n_t,
+               length(a.addr)::FLOAT AS len_a_s, length(b.addr)::FLOAT AS len_a_t,
+               -- cluster support within this reference's candidate list (all its candidates are in one slice)
+               (count(*) OVER (PARTITION BY c.sid, b.core))::FLOAT AS sup_core,
+               (CASE WHEN b.addr = '' THEN -1 ELSE count(*) OVER (PARTITION BY c.sid, b.addr) END)::FLOAT AS sup_addr,
+               replace(a.core, ' ', '') AS scor_ns, replace(b.core, ' ', '') AS tcor_ns,
+               len(list_distinct(a.nums)) AS s_nd, len(list_distinct(b.nums)) AS t_nd,
+               len(list_intersect(list_distinct(a.nums), list_distinct(b.nums)))::FLOAT AS num_common,
+               len(a.nums)::FLOAT AS s_num_cnt, len(b.nums)::FLOAT AS t_num_cnt,
+               coalesce(a.nums[1], '') AS s_hn, coalesce(b.nums[1], '') AS t_hn,
+               TRY_CAST(left(a.nums[1], 9) AS DOUBLE) AS s_hv, TRY_CAST(left(b.nums[1], 9) AS DOUBLE) AS t_hv,
+               coalesce(length(a.nums[1]) = length(b.nums[1]) AND levenshtein(a.nums[1], b.nums[1]) = 1, false) AS hn_one
         FROM c JOIN rec a ON a.rid = c.sid JOIN rec b ON b.rid = c.tid WHERE {where}
         ORDER BY c.sid, c.tid""").df()
 
@@ -205,7 +226,9 @@ def _connect(work, split, mem, threads):
         con.execute("INSERT INTO skel SELECT rid, skel FROM skdf")
         con.unregister("skdf")
         del sk
-    con.execute("CREATE OR REPLACE TABLE rec AS SELECT r.*, k.skel FROM rec r JOIN skel k USING (rid)")
+    # skel + the address's digit tokens (house/plot numbers, PIN/ZIP), both computed once per record
+    con.execute("""CREATE OR REPLACE TABLE rec AS SELECT r.*, k.skel, regexp_extract_all(r.addr, '[0-9]+') AS nums
+                   FROM rec r JOIN skel k USING (rid)""")
     if con.execute("SELECT count(*) FROM rec WHERE skel IS NULL").fetchone()[0]:
         raise ValueError("skeleton missing for some records")
     con.execute("DROP TABLE skel")
