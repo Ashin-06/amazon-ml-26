@@ -21,6 +21,9 @@ def test_norm_canonicalizes_noise():
     assert norm(None) == "" and norm("") == ""
     assert norm("अरिहंत") != ""  # native script is transliterated, not dropped
     assert core_of(norm("Taran It Pvt Ltd")) == "taran it"
+    # French region vs departement components share one code; street names stay untouched
+    assert norm("4 Rue du Nord, Lille, Nord", states=True) == "4 r du nord lille frhdf"
+    assert norm("19 R. Berthelot, Merignac, Gironde", states=True) == norm("19 R. Berthelot, Merignac, Nouvelle-Aquitaine", states=True)
 
 
 def test_clean_name_phone_and_alias():

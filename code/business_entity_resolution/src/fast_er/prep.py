@@ -66,6 +66,17 @@ STATES = {
     "amdhrprdes": "ap", "pmjab": "pb", "od'isa": "od",
 }
 STATE_RE = re.compile(r"\b(" + "|".join(sorted(map(re.escape, STATES), key=len, reverse=True)) + r")\b")
+# France (test-only): references give the region, targets often the departement. Both map to one region
+# code, like US state names vs codes. Only whole comma-separated components are mapped, so street names
+# such as "Rue du Nord" are untouched.
+FR_REGIONS = {
+    "frhdf": ["hauts de france", "nord", "pas de calais", "somme", "aisne", "oise"],
+    "frnaq": ["nouvelle aquitaine", "gironde", "landes", "dordogne", "lot et garonne", "pyrenees atlantiques",
+              "charente", "charente maritime", "deux sevres", "vienne", "haute vienne", "creuse", "correze"],
+    "frpdl": ["pays de la loire", "loire atlantique", "maine et loire", "mayenne", "sarthe", "vendee"],
+}
+FR_REGION_OF = {name: code for code, names in FR_REGIONS.items() for name in names}
+FR_COMPONENT = re.compile(r"[\s\-]+")
 # Dropped from the 'core' name view (legal forms, generic filler).
 LEGAL = {"pvt", "ltd", "inc", "llc", "corp", "co", "lp", "llp", "plc", "pc", "pllc", "the", "&", "of", "a", "k",
          "com", "www", "in", "net", "org", "sa", "sas", "sarl", "eurl", "sci", "public", "india", "group",
@@ -96,6 +107,8 @@ def norm(text, states=False):
         text = anyascii(text.replace("°", " ").replace("º", " "))  # "N°5" -> "N 5", not "Ndeg5"
     text = text.lower().replace("&", " and ")
     if states:
+        if "," in text:  # whole-component French region/departement -> region code
+            text = ",".join(FR_REGION_OF.get(FR_COMPONENT.sub(" ", c).strip(), c) for c in text.split(","))
         text = STATE_RE.sub(lambda m: STATES[m.group(1)], text)
     out = []
     for t in map(_tok, NON_ALNUM.sub(" ", text).split()):
