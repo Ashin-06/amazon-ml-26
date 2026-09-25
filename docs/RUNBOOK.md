@@ -1,5 +1,14 @@
 # Runbook: verified fast pipeline
 
+## Review the public-score gap before selecting a run
+
+Read [the latest investigation](V12_SCORE_INVESTIGATION_2026-09-26.md). v12's submitted file was reproduced exactly; the latest recorded public best is v15k 0.972. Do not compare hold-only reconstructed scores against saved production metrics as if they use the same validation protocol. Do not assume a v12 cutoff transfers to v17 or a neural blend.
+
+New training runs write `hold_decisions.parquet` (every held reference, including empty predictions) and `hold_error_rows.parquet` (exact score and additive errors, country and saved half). Use tuning rows for selecting changes. `metrics.json.error_diagnostics.tune/final` summarizes the already-selected decision. Final rows are not a new tuning set.
+
+Packaging and ensemble application require `candidate_scope=input_to_first_scoring_model` and `pairs=blocked_pairs`. Do not edit historical manifests to satisfy these checks. A legacy v17 survivor-only export must be corrected with preserved provenance before final submission. The running job remains unchanged.
+
+
 This checkout is separate from active runs in D:/Amazon ML 26. Use fresh artifact paths. Old unmanifested outputs cannot be reused. A small training-reference count does not bound full-target retrieval or global scoring cost.
 
 ## Verify this checkout

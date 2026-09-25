@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from fast_er.integrity import code_digest, digest, seal, verify, verify_stage
+from fast_er.integrity import code_digest, digest, seal, verify, verify_stage, require_first_model_candidates
 from fast_er.model import (_connect, _load_truth, _score_all, check_scores, evaluate_threshold,
                            lit, load_models, scratch, write_outputs, model_path)
 from fast_er.validation import validate_pairs
@@ -97,6 +97,8 @@ def apply(work, split, out_dir, score_dirs, name="ensemble", mem="4GB", threads=
         raise ValueError("One prediction directory required per selected member")
     expected = sorted(selected["inputs"]["members"].values())
     metas = [verify(p,"prediction_manifest.json") for p in score_dirs]
+    for meta in metas:
+        require_first_model_candidates(meta)
     stage = verify_stage(work,split)
     if sorted(m["inputs"].get("model", "") for m in metas) != expected:
         raise ValueError("Prediction members do not match selected ensemble")
@@ -120,9 +122,12 @@ def apply(work, split, out_dir, score_dirs, name="ensemble", mem="4GB", threads=
         out.mkdir(parents=True,exist_ok=False)
         con.execute(f"COPY averaged TO {lit(out/'scores.parquet')} (FORMAT parquet)")
         links, refs = write_outputs(con,out/"scores.parquet",threshold,out)
+        pairs = con.execute('SELECT count(*) FROM c').fetchone()[0]
         seal(out,"prediction_manifest.json",{"code":code_digest(),"stage":stage,"ensemble_name":name,
              "ensemble":digest(model_path(work,name)/"ensemble_manifest.json"),"threshold":threshold,
-             "references":refs,"matches":links},["scores.parquet","matching_results.tsv","candidate_pairs.tsv"])
+             "references":refs,"matches":links,"pairs":pairs,"blocked_pairs":pairs,
+             "candidate_scope":"input_to_first_scoring_model"},
+             ["scores.parquet","matching_results.tsv","candidate_pairs.tsv"])
     finally:
         con.close()
 

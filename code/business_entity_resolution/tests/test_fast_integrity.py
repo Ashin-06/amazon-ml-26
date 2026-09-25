@@ -171,6 +171,13 @@ def test_fast_raw_to_model_to_validated_outputs(completed_pipeline):
     assert metrics['references_fit']['stage2'] <= 70
     assert metrics['params']['stage2_all'] is False
     assert set(metrics['params']['devices'].values()) == {'cpu'}
+    error_rows = pd.read_parquet(root/'work/model/hold_error_rows.parquet')
+    decisions = pd.read_parquet(root/'work/model/hold_decisions.parquet')
+    assert len(error_rows) == len(decisions) == metrics['holdout_s1']
+    for half in ('tune','final'):
+        summary = metrics['error_diagnostics'][half]['all']
+        assert summary['macro_f05'] == pytest.approx(metrics['stage2'][half+'_macro_f05'])
+        assert summary['retrieval_loss']+summary['later_miss_loss']+summary['false_positive_loss'] == pytest.approx(1-summary['macro_f05'])
     model.predict(root/'work','test',root/'repeat',mem='512MB',threads=1,chunks=13)
     for name in ('matching_results.tsv','candidate_pairs.tsv'):
         assert (root/'out'/name).read_bytes() == (root/'repeat'/name).read_bytes()
@@ -189,6 +196,10 @@ def test_cached_training_scores_equal_full_refeaturization(completed_pipeline):
     hold = pd.read_parquet(root/'work/model/hold_preds.parquet').merge(fresh, on=['sid', 'tid'])
     assert len(hold) == len(pd.read_parquet(root/'work/model/hold_preds.parquet')) > 0
     assert np.allclose(hold.p_stage1, hold.p1, atol=1e-6) and np.allclose(hold.p_stage2, hold.p2, atol=1e-6)
+    threshold = json.loads((root/'work/model/metrics.json').read_text())['threshold']
+    expected = model.decide(keys.sid, keys.tid, p2, threshold)
+    saved = pd.read_parquet(root/'work/model/hold_decisions.parquet')
+    assert all(set(r.matched_tids) == expected.get(r.sid,set()) for r in saved.itertuples())
     assert not list((root/'work').glob('fe_train_*'))  # scratch removed
 
 
@@ -293,6 +304,14 @@ def test_verified_archive_rejects_drafts_and_wrong_originals(completed_pipeline,
     archive = tmp_path/"qa.zip"
     result = pkg.build_package(root/"out",root/"work",doc,manifest,archive)
     assert result["files"] > 10 and archive.is_file()
+    wrong_scope = tmp_path/'wrong_scope'
+    shutil.copytree(root/'out', wrong_scope)
+    meta_path = wrong_scope/'prediction_manifest.json'
+    invalid = json.loads(meta_path.read_text())
+    invalid['inputs']['candidate_scope'] = 'stage2_survivors'
+    meta_path.write_text(json.dumps(invalid),encoding='utf-8')
+    with pytest.raises(ValueError,match='first scoring model'):
+        pkg.build_package(wrong_scope,root/'work',doc,manifest,tmp_path/'wrong_scope.zip')
     expected["test_source1.tsv"]["sha256"] = "0"*64
     manifest.write_text(json.dumps(expected),encoding="utf-8")
     with pytest.raises(ValueError, match="audited"):
