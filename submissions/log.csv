@@ -1,3 +1,4 @@
 datetime_ist,file,commit,model,local_cv,public_lb,notes
 2026-09-25 ready,submissions/v1_matching_results.tsv,6fe0e2c,v1 single-stage LGBM + basic blocking,0.94218 (holdout macro F0.5; blocking oracle 0.9656),,not yet uploaded
 2026-09-25 ready,submissions/v4_matching_results.tsv,edde4e6,v4 lexicon + composite blocking + 2-stage LGBM (local run),0.97619 (holdout macro F0.5; blocking oracle 0.9890),,not yet uploaded
+2026-09-25 12:40,submissions/v10_matching_results.tsv + submissions/v10_code.zip,sub-v10 (395ccbf),v10 LGB 2-stage: v7 blocking + name cleaning + per-source ctx + weight=ref (200k train),final-half 0.97737 (v4 same protocol 0.97576),,validator PASS (--check-ids) + checker PASS; not yet uploaded
