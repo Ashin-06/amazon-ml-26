@@ -162,6 +162,8 @@ def scratch(work):
 
 
 def _connect(work, split, mem, threads):
+    """Open DuckDB with resource limits and load `rec` (records + name/address frequencies) and
+    `c` (candidates + candidate-list context) for one split."""
     con = duckdb.connect()
     configure(con, mem, threads, Path(scratch(work)) / "duck_tmp")
     w = Path(work) / split
@@ -213,6 +215,8 @@ def decide(sid, tid, p, thr):
 
 
 def macro_f05(truth, pred, all_sids):
+    """Official metric: F0.5 per S1, averaged over `all_sids` (singletons included: an empty
+    prediction for an S1 with no true matches scores 1, any prediction scores 0)."""
     if not len(all_sids):
         raise ValueError("macro_f05 needs at least one reference")
     tot = 0.0
@@ -234,6 +238,7 @@ def hold_rule(col, hold_mod):
 
 
 def _params(threads, seed, leaves=127, lr=0.05):
+    """LightGBM hyperparameters shared by all three boosters."""
     return dict(objective="binary", learning_rate=lr, num_leaves=leaves, min_data_in_leaf=100,
                 feature_fraction=0.8, bagging_fraction=0.8, bagging_freq=1, lambda_l2=1.0,
                 num_threads=threads or 0, verbose=-1, seed=seed)
@@ -259,6 +264,7 @@ def _predict_stage1(con, models, where, threads, chunks, tmp=None, tag=""):
 
 
 def _check_args(n_train, hold_mod, chunks, rounds):
+    """Fail early on invalid training settings instead of producing empty groups later."""
     for name, v, lo in (("n_train", n_train, 2), ("hold_mod", hold_mod, 2), ("chunks", chunks, 1), ("rounds", rounds, 1)):
         if not isinstance(v, int) or v < lo:
             raise ValueError(f"{name} must be an int >= {lo}, got {v!r}")
@@ -294,6 +300,16 @@ def pair_weights(sid, mode):
 
 def train(work, gt_path, n_train=300_000, hold_mod=22, mem="20GB", threads=None, seed=26, rounds=600,
           chunks=8, leaves=127, lr=0.05, weight="none"):
+    """Train the two-stage matcher on the train split and write WORK/model/.
+
+    1. Validate labels; split S1s into A, B (matcher training) and hold (hash rule shared with the
+       lexicon), hold further into tune/final halves.
+    2. Stage 1: LightGBM on A and on B; out-of-fold p1 for A/B, averaged p1 for hold and for the
+       non-sampled S1s that compete for the same targets.
+    3. Stage 2: LightGBM on A+B with stage-1 features plus competition context built from p1.
+    4. Threshold tuned on the tune half (global target ownership), macro F0.5 reported on the
+       final half. Saves boosters, metrics.json, hold predictions and split ids.
+    """
     _check_args(n_train, hold_mod, chunks, rounds)
     t0 = time.time()
     lg = lambda msg: print(f"[train {time.time() - t0:.0f}s] {msg}", flush=True)  # noqa: E731
@@ -421,6 +437,12 @@ def load_models(model_dir):
 
 
 def predict(work, split, out_dir, mem="20GB", threads=None, chunks=8, tmp=None):
+    """Score every candidate pair of `split` with the saved boosters and write the two TSVs.
+
+    Stage-1 features are cached per chunk in a run-owned temp dir, stage-2 context is built from
+    all stage-1 scores (so competing S1s are seen), scores are validated and saved to
+    scores.parquet, then write_outputs applies threshold + one-owner-per-target.
+    """
     if not isinstance(chunks, int) or chunks < 1:
         raise ValueError(f"chunks must be a positive int, got {chunks!r}")
     t0 = time.time()
