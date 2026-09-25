@@ -25,8 +25,13 @@ def run(cmd, what):
         sys.exit(f"RELEASE STOPPED: {what} failed; nothing was copied.")
 
 
-run([sys.executable, validator, "--matching", str(m), "--candidate", str(c), "--test-dir", test_dir, "--check-ids"],
-    "organizers' validator (--check-ids)")
+# The organizers' validator keeps every candidate ID in Python sets (~15 GB for ~165M candidates); its own docs say to
+# drop --candidate if memory runs out. Large candidate files are then checked by check_submission.py (streamed format
+# + DuckDB: one row per test S1, IDs exist, matches are a subset), and the validator checks the matching file.
+big = c.stat().st_size > 1_000_000_000
+run([sys.executable, validator, "--matching", str(m)] + ([] if big else ["--candidate", str(c)]) +
+    ["--test-dir", test_dir, "--check-ids"],
+    "organizers' validator (--check-ids" + (", matching only; candidate file checked by check_submission)" if big else ")"))
 run([sys.executable, str(here / "check_submission.py"), str(m), test_dir, "--candidate", str(c)],
     "byte-level / rule-level checker")
 dst = Path("submissions"); dst.mkdir(exist_ok=True)

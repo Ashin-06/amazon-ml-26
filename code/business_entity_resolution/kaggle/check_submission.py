@@ -103,6 +103,16 @@ if a.candidate:
     print(f"  matched pairs missing from candidate_pairs: {v:,}")
     if v:
         fail(f"{v:,} matched pairs are not in candidate_pairs (must be a subset)")
+    con.execute(f"CREATE TABLE cr AS SELECT source1_entity_id AS s FROM {rd(a.candidate)}")
+    for name, sql in {"candidate: duplicate S1 rows": "SELECT count(*) - count(DISTINCT s) FROM cr",
+                      "candidate: test S1 entities missing a row": "SELECT count(*) FROM s1 ANTI JOIN cr ON cr.s = s1.entity_id",
+                      "candidate: rows that are not test S1 entities": "SELECT count(*) FROM cr ANTI JOIN s1 ON cr.s = s1.entity_id",
+                      "candidate: IDs not in test S2/S3": "SELECT count(*) FROM cl ANTI JOIN tg ON tg.entity_id = cl.t"}.items():
+        v = q(sql)
+        print(f"  {name}: {v:,}")
+        if v:
+            fail(f"{v:,} {name}")
+    print(f"  candidate pairs {q('SELECT count(*) FROM cl'):,}")
 print(f"  links {q('SELECT count(*) FROM ml'):,}")
 print("\nALL CHECKS PASSED" if not problems else f"\n{len(problems)} PROBLEM(S) FOUND")
 sys.exit(1 if problems else 0)
