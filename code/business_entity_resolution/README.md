@@ -32,13 +32,30 @@ python src/fast_er/run_stage3.py work work/pq/train_ground_truth.parquet test ou
 `output/` then holds `matching_results.tsv` (leaderboard file) and `candidate_pairs.tsv` (exactly the pairs
 the matcher scored; every match is a subset of it). `work/train/blocking_recall.json` and
 `work/model/metrics.json` hold blocking recall, the oracle ceiling, and holdout macro F0.5 for stage 1 and 2.
-Check format with the organizers' validator:
+The hold references are split in two: the threshold is tuned on the `tune` half and `holdout_macro_f05`
+is reported on the untouched `final` half, with competing non-hold references taking part in target
+ownership exactly as in the test decision. Split membership is saved in `work/model/split_ids.parquet`.
+
+Safety checks built into the pipeline: labels that do not resolve to known records stop training;
+non-finite or out-of-range probabilities, null keys, and duplicate pairs stop output writing; saved models
+whose feature list differs from the code are refused before any work starts; each stage-1 split records the
+code hashes/settings that made it (`stage1_meta.json`) and refuses to mix versions.
+
+Check format with the organizers' validator, which ships in the supplied `student_resource/utils/` folder
+(not in this package):
 
 ```text
-python utils/validate_submission.py --matching output/matching_results.tsv --candidate output/candidate_pairs.tsv --test-dir DATA/test
+python PATH/TO/student_resource/utils/validate_submission.py --matching output/matching_results.tsv --candidate output/candidate_pairs.tsv --test-dir DATA/test
 ```
+
+Tests: `python -m pytest tests/test_fast_er.py -q`.
+
+A submission zip in the organizers' layout (allow-listed files, optional model bundle, never overwrites):
+`python kaggle/package_submission.py TEAM output --run work` from the repository root paths shown in its docstring.
 
 ## Older baseline
 
 `src/business_er/` and `src/run.py` are the first SQLite-FTS5 baseline written before the full-scale run.
 Its one-query-at-a-time retrieval is too slow for 1.7M test references, so it is not the submission pipeline.
+It (and `tests/test_baseline.py`, `tests/test_failure_cases.py`, `tests/test_foundations.py`) additionally needs
+`scikit-learn==1.7.2` and `scipy==1.17.1`, which the fast pipeline does not require.

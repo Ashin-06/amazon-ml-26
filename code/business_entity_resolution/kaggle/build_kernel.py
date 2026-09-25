@@ -32,6 +32,10 @@ subprocess.run([sys.executable, "-m", "pip", "install", "-q", "--no-deps", *whl]
 for mod, pkg in (("duckdb", "duckdb"), ("rapidfuzz", "rapidfuzz"), ("lightgbm", "lightgbm")):
     try: __import__(mod)
     except ImportError: subprocess.run([sys.executable, "-m", "pip", "install", "-q", pkg], check=False)
+import importlib
+for mod in ("duckdb", "rapidfuzz", "lightgbm", "anyascii", "pyarrow", "pandas", "numpy"):
+    try: importlib.import_module(mod)
+    except ImportError as e: raise SystemExit(f"PREFLIGHT FAILED: {{mod}} not importable ({{e}}); enable internet or attach its wheel")
 PQ = os.path.dirname(glob.glob("/kaggle/input/**/train_source1.parquet", recursive=True)[0])
 W = "/kaggle/working/work"
 prev = glob.glob("/kaggle/input/**/work/train/cands.parquet", recursive=True)

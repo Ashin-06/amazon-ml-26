@@ -22,6 +22,8 @@ from pathlib import Path
 
 import duckdb
 
+from .model import configure, lit
+
 KEYS_SQL = """
 CREATE OR REPLACE TABLE keys AS
 WITH t AS (
@@ -61,11 +63,8 @@ def block(split, work="work", cap=300, k=25, k_field=10, chunks=8, threads=None,
         return out
     t0 = time.time()
     con = duckdb.connect()
-    con.execute(f"SET memory_limit='{mem}'; SET preserve_insertion_order=false")
-    con.execute(f"SET temp_directory='{Path(os.environ.get('FASTER_TMP') or work) / 'duck_tmp'}'")
-    if threads:
-        con.execute(f"SET threads={threads}")
-    con.execute(f"CREATE TABLE rec AS SELECT rid, src, country, core, addr FROM read_parquet('{Path(work) / split}/norm_s*.parquet')")
+    configure(con, mem, threads, Path(os.environ.get("FASTER_TMP") or work) / "duck_tmp")
+    con.execute(f"CREATE TABLE rec AS SELECT rid, src, country, core, addr FROM read_parquet({lit(Path(work) / split / 'norm_s*.parquet')})")
     con.execute(KEYS_SQL)
     con.execute("DROP TABLE rec")
     n_t = con.execute("SELECT count(DISTINCT rid) FROM keys WHERE src > 1").fetchone()[0]
@@ -104,10 +103,10 @@ def block(split, work="work", cap=300, k=25, k_field=10, chunks=8, threads=None,
                      (CASE WHEN sn > 0 THEN r_n ELSE 9999 END)::SMALLINT AS r_n,
                      (CASE WHEN sa > 0 THEN r_a ELSE 9999 END)::SMALLINT AS r_a
               FROM r WHERE r_s <= {k} OR (r_n <= {k_field} AND sn > 0) OR (r_a <= {k_field} AND sa > 0)
-            ) TO '{part}' (FORMAT parquet)""")
+            ) TO {lit(part)} (FORMAT parquet)""")
         print(f"[block {split}] chunk {c + 1}/{chunks} {time.time() - t0:.0f}s", flush=True)
-    con.execute(f"COPY (SELECT * FROM read_parquet('{tmp}/*.parquet')) TO '{out}' (FORMAT parquet)")
-    n = con.execute(f"SELECT count(*), count(DISTINCT sid) FROM '{out}'").fetchone()
+    con.execute(f"COPY (SELECT * FROM read_parquet({lit(tmp / '*.parquet')})) TO {lit(out)} (FORMAT parquet)")
+    n = con.execute(f"SELECT count(*), count(DISTINCT sid) FROM read_parquet({lit(out)})").fetchone()
     print(f"[block {split}] done {n[0]:,} pairs for {n[1]:,} S1  {time.time() - t0:.0f}s", flush=True)
     return out
 
@@ -116,22 +115,22 @@ def blocking_recall(split="train", work="work", gt_path="work/pq/train_ground_tr
     """Train-only: link recall and oracle macro F0.5 (empty prediction for singletons = 1.0)."""
     con = duckdb.connect()
     w = Path(work) / split
-    con.execute(f"CREATE VIEW ids AS SELECT rid, entity_id FROM read_parquet('{w}/norm_s*.parquet')")
+    con.execute(f"CREATE VIEW ids AS SELECT rid, entity_id FROM read_parquet({lit(w / 'norm_s*.parquet')})")
     con.execute(f"""CREATE TABLE gt AS
         SELECT a.rid AS sid, b.rid AS tid FROM (
           SELECT source1_entity_id AS s, unnest(string_split(matched_entity_ids, ',')) AS t
-          FROM '{gt_path}' WHERE coalesce(matched_entity_ids, '') <> '') g
+          FROM read_parquet({lit(gt_path)}) WHERE coalesce(matched_entity_ids, '') <> '') g
         JOIN ids a ON a.entity_id = g.s JOIN ids b ON b.entity_id = g.t""")
     res = {}
     for label, cond in (("all", "TRUE"), ("top_s10", "c.r_s <= 10"), ("top_s25", "c.r_s <= 25")):
         r = con.execute(f"""
             WITH hit AS (SELECT g.sid, count(c.tid) AS hits, count(*) AS n FROM gt g
-                         LEFT JOIN (SELECT * FROM '{w}/cands.parquet' c WHERE {cond}) c USING (sid, tid) GROUP BY g.sid),
-                 s1 AS (SELECT rid AS sid FROM read_parquet('{w}/norm_s1.parquet'))
+                         LEFT JOIN (SELECT * FROM read_parquet({lit(w / 'cands.parquet')}) c WHERE {cond}) c USING (sid, tid) GROUP BY g.sid),
+                 s1 AS (SELECT rid AS sid FROM read_parquet({lit(w / 'norm_s1.parquet')}))
             SELECT sum(hits)::DOUBLE / sum(n),
                    (SELECT avg(coalesce(5.0 * h.hits / (5 * h.hits + (h.n - h.hits)), 1.0))
                     FROM s1 LEFT JOIN hit h USING (sid))
             FROM hit""").fetchone()
         res[label] = {"link_recall": r[0], "oracle_f05": r[1]}
-    res["pairs_per_s1"] = con.execute(f"SELECT count(*) / count(DISTINCT sid) FROM '{w}/cands.parquet'").fetchone()[0]
+    res["pairs_per_s1"] = con.execute(f"SELECT count(*) / count(DISTINCT sid) FROM read_parquet({lit(w / 'cands.parquet')})").fetchone()[0]
     return res

@@ -10,12 +10,15 @@ S1's other candidates and with the best competing S1 for the same target.
 
 Decision: keep pairs with p2 >= threshold, then each target goes only to its
 highest-probability S1 (labels show every target belongs to at most one S1).
-The threshold maximises exact macro F0.5 on held-out S1s (never used in fitting).
+The threshold maximises exact macro F0.5 on the 'tune' half of the held-out S1s (with
+competing non-hold S1s taking part in target ownership); the score is reported on the other
+'final' half. Hold S1s are never used for fitting or for the lexicon.
 """
 import json
 import os
 import re
 import shutil
+import tempfile
 import time
 from pathlib import Path
 
@@ -32,7 +35,7 @@ DIGITS = re.compile(r"\d+")
 # Frequency of exact core name / address among targets and references (same country).
 REC_SQL = """
 CREATE TABLE rec AS
-WITH r AS (SELECT * FROM read_parquet('{w}/norm_s*.parquet'))
+WITH r AS (SELECT * FROM read_parquet({glob}))
 SELECT r.*,
   sum((src > 1)::INT) OVER (PARTITION BY country, core) AS fc_t,
   sum((src = 1)::INT) OVER (PARTITION BY country, core) AS fc_s,
@@ -49,7 +52,7 @@ SELECT *,
   count(*) OVER (PARTITION BY tid) AS t_nc,
   row_number() OVER (PARTITION BY tid ORDER BY s DESC, sid) AS t_rank,
   s / max(s) OVER (PARTITION BY tid) AS t_rel
-FROM read_parquet('{cands}')
+FROM read_parquet({cands})
 """
 
 BASE = ["s", "sn", "sa", "nk", "r_s", "r_n", "r_a", "n_c", "s_rel", "s_gap", "t_nc", "t_rank", "t_rel",
@@ -136,6 +139,23 @@ def _pairs(con, where):
         ORDER BY c.sid, c.tid""").df()
 
 
+def lit(value):
+    """SQL string literal with quotes escaped (paths may contain apostrophes)."""
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def configure(con, mem, threads, temp_dir):
+    """Validated DuckDB resource settings."""
+    if not re.fullmatch(r"\d+(\.\d+)?\s*[KMGT]i?B", str(mem)):
+        raise ValueError(f"memory limit must look like '8GB', got {mem!r}")
+    if threads is not None and (not isinstance(threads, int) or threads < 1):
+        raise ValueError(f"threads must be a positive int, got {threads!r}")
+    con.execute(f"SET memory_limit={lit(mem)}; SET preserve_insertion_order=false")
+    con.execute(f"SET temp_directory={lit(temp_dir)}")
+    if threads:
+        con.execute(f"SET threads={threads}")
+
+
 def scratch(work):
     """Directory for spill/temporary files: $FASTER_TMP if set (e.g. /tmp on Kaggle), else the work dir."""
     return os.environ.get("FASTER_TMP") or str(work)
@@ -143,15 +163,12 @@ def scratch(work):
 
 def _connect(work, split, mem, threads):
     con = duckdb.connect()
-    con.execute(f"SET memory_limit='{mem}'; SET preserve_insertion_order=false")
-    con.execute(f"SET temp_directory='{Path(scratch(work)) / 'duck_tmp'}'")
-    if threads:
-        con.execute(f"SET threads={threads}")
+    configure(con, mem, threads, Path(scratch(work)) / "duck_tmp")
     w = Path(work) / split
-    con.execute(REC_SQL.format(w=w))
+    con.execute(REC_SQL.format(glob=lit(w / "norm_s*.parquet")))
     if "rawn" not in [r[0] for r in con.execute("DESCRIBE rec").fetchall()]:  # runs prepared before rawn existed
         con.execute("ALTER TABLE rec ADD COLUMN rawn VARCHAR; UPDATE rec SET rawn = replace(name, ' ', '')")
-    con.execute(GROUP_SQL.format(cands=w / "cands.parquet"))
+    con.execute(GROUP_SQL.format(cands=lit(w / "cands.parquet")))
     return con
 
 
@@ -177,14 +194,27 @@ def _ctx_matrix(con, keys):
     return np.column_stack([m[c].astype(np.float32) for c in CTX])
 
 
+def check_scores(p, thr=None, name="scores"):
+    """Probabilities must be finite and in [0,1]; NaN would otherwise pass a SQL `p >= thr` filter."""
+    p = np.asarray(p, dtype=np.float64)
+    if p.size and not (np.isfinite(p).all() and p.min() >= 0.0 and p.max() <= 1.0):
+        raise ValueError(f"{name}: non-finite or out-of-range probabilities")
+    if thr is not None and not (np.isfinite(thr) and 0.0 <= thr <= 1.0):
+        raise ValueError(f"threshold must be in [0,1], got {thr!r}")
+
+
 def decide(sid, tid, p, thr):
-    """Threshold, then give each target only to its best S1. Returns {sid: [tid,...]}."""
+    """Threshold, then give each target only to its best S1 (ties: lowest sid, same rule as the SQL
+    writer). Returns {sid: [tid,...]}."""
+    check_scores(p, thr)
     df = pd.DataFrame({"sid": sid, "tid": tid, "p": p})
-    df = df[df.p >= thr].sort_values("p", ascending=False).drop_duplicates("tid")
+    df = df[df.p >= thr].sort_values(["p", "sid"], ascending=[False, True], kind="mergesort").drop_duplicates("tid")
     return df.groupby("sid")["tid"].apply(list).to_dict()
 
 
 def macro_f05(truth, pred, all_sids):
+    if not len(all_sids):
+        raise ValueError("macro_f05 needs at least one reference")
     tot = 0.0
     for s in all_sids:
         t, q = truth.get(s, set()), set(pred.get(s, ()))
@@ -198,6 +228,8 @@ def macro_f05(truth, pred, all_sids):
 
 def hold_rule(col, hold_mod):
     """SQL predicate selecting holdout S1s (~1/hold_mod of references)."""
+    if not isinstance(hold_mod, int) or hold_mod < 2:
+        raise ValueError(f"hold_mod must be an int >= 2, got {hold_mod!r}")
     return f"(hash({col} || 'hold26') % {hold_mod} = 0)"
 
 
@@ -226,15 +258,37 @@ def _predict_stage1(con, models, where, threads, chunks, tmp=None, tag=""):
     return pd.concat(keys, ignore_index=True), np.concatenate(p1)
 
 
+def _check_args(n_train, hold_mod, chunks, rounds):
+    for name, v, lo in (("n_train", n_train, 2), ("hold_mod", hold_mod, 2), ("chunks", chunks, 1), ("rounds", rounds, 1)):
+        if not isinstance(v, int) or v < lo:
+            raise ValueError(f"{name} must be an int >= {lo}, got {v!r}")
+
+
+def _load_truth(con, gt_path):
+    """Labels -> (sid, tid) rids. Refuses any label that does not resolve to a known record
+    (an unknown target must never silently turn a reference into a fake singleton)."""
+    con.execute(f"""CREATE TABLE gt_raw AS SELECT source1_entity_id s, unnest(string_split(matched_entity_ids, ',')) t
+          FROM read_parquet({lit(gt_path)}) WHERE coalesce(matched_entity_ids, '') <> ''""")
+    con.execute("""CREATE TABLE gt AS SELECT a.rid AS sid, b.rid AS tid FROM gt_raw g
+        JOIN rec a ON a.entity_id = g.s AND a.src = 1 JOIN rec b ON b.entity_id = g.t AND b.src > 1""")
+    n_raw, n_ok = (con.execute(f"SELECT count(*) FROM {t}").fetchone()[0] for t in ("gt_raw", "gt"))
+    n_lab = con.execute(f"SELECT count(*) FROM read_parquet({lit(gt_path)})").fetchone()[0]
+    n_s1 = con.execute("SELECT count(*) FROM rec WHERE src = 1").fetchone()[0]
+    dup_t = con.execute("SELECT count(*) - count(DISTINCT tid) FROM gt").fetchone()[0]
+    dup_p = con.execute("SELECT count(*) - count(DISTINCT (sid, tid)) FROM gt").fetchone()[0]
+    if n_raw != n_ok or n_lab != n_s1 or dup_p:
+        raise ValueError(f"label integrity: {n_raw} raw links, {n_ok} resolved; {n_lab} label rows vs "
+                         f"{n_s1} S1 records; {dup_p} duplicate pairs")
+    return {"links": n_ok, "label_rows": n_lab, "targets_with_2plus_owners": dup_t}
+
+
 def train(work, gt_path, n_train=300_000, hold_mod=22, mem="20GB", threads=None, seed=26, rounds=600,
           chunks=8, leaves=127, lr=0.05):
+    _check_args(n_train, hold_mod, chunks, rounds)
     t0 = time.time()
     lg = lambda msg: print(f"[train {time.time() - t0:.0f}s] {msg}", flush=True)  # noqa: E731
     con = _connect(work, "train", mem, threads)
-    con.execute(f"""CREATE TABLE gt AS SELECT a.rid AS sid, b.rid AS tid FROM (
-          SELECT source1_entity_id s, unnest(string_split(matched_entity_ids, ',')) t
-          FROM '{gt_path}' WHERE coalesce(matched_entity_ids, '') <> '') g
-        JOIN rec a ON a.entity_id = g.s JOIN rec b ON b.entity_id = g.t""")
+    label_stats = _load_truth(con, gt_path)
     # Disjoint S1 groups by a seeded hash of the entity id (never used as a feature).
     # Holdout = fixed hash rule shared with the lexicon step (which excludes these S1s).
     half = n_train // 2
@@ -283,21 +337,44 @@ def train(work, gt_path, n_train=300_000, hold_mod=22, mem="20GB", threads=None,
                    valid_sets=[lgb.Dataset(hd["X2"], hd["y"], feature_name=FEATS2)],
                    callbacks=[lgb.log_evaluation(100)])
     hold_sids = con.execute("SELECT sid FROM split WHERE g = 'hold'").df().sid.tolist()
+    # Hold is split in two: thresholds are tuned on "tune" and the score is reported on "final".
+    tune_set = set(con.execute(f"""SELECT r.rid FROM rec r JOIN split s ON s.sid = r.rid
+                                  WHERE s.g = 'hold' AND hash(r.entity_id || 'tune{seed}') % 2 = 0""").df().rid)
+    tune_sids = [s for s in hold_sids if s in tune_set]
+    final_sids = [s for s in hold_sids if s not in tune_set]
     truth = hd["lab"].groupby("sid")["tid"].apply(set).to_dict()
     hk = hd["keys"]
+    # Competitors outside hold (out-of-fold / averaged stage-1 scores) take part in target
+    # ownership, as they do for the real test decision.
+    comp = pd.concat([data["A"]["keys"].assign(p=data["A"]["p1"]), data["B"]["keys"].assign(p=data["B"]["p1"]),
+                      ok.assign(p=op1)], ignore_index=True)
+    comp = comp[comp.tid.isin(set(hk.tid))]
     res = {}
     for name, p in (("stage1", hd["p1"]), ("stage2", m2.predict(hd["X2"], num_threads=threads or 0))):
-        grid = {round(t, 3): macro_f05(truth, decide(hk.sid.values, hk.tid.values, p, t), hold_sids)
-                for t in np.arange(0.2, 0.96, 0.025)}
-        thr = max(grid, key=grid.get)
-        res[name] = {"macro_f05": grid[thr], "threshold": thr, "grid": grid}
-        lg(f"HOLDOUT {name}: macro F0.5 = {grid[thr]:.5f} at thr={thr}")
+        check_scores(p, name=f"hold {name}")
+        allsid = np.concatenate([hk.sid.values, comp.sid.values])
+        alltid = np.concatenate([hk.tid.values, comp.tid.values])
+        allp = np.concatenate([p, comp.p.values])
+        grid_t, grid_f, grid_local = {}, {}, {}
+        for t in np.arange(0.2, 0.96, 0.025):
+            t = round(float(t), 3)
+            dec = decide(allsid, alltid, allp, t)  # global ownership, metric over hold only
+            grid_t[t] = macro_f05(truth, dec, tune_sids)
+            grid_f[t] = macro_f05(truth, dec, final_sids)
+            grid_local[t] = macro_f05(truth, decide(hk.sid.values, hk.tid.values, p, t), hold_sids)
+        thr = max(grid_t, key=grid_t.get)
+        res[name] = {"threshold": thr, "tune_macro_f05": grid_t[thr], "final_macro_f05": grid_f[thr],
+                     "local_ownership_hold_f05": grid_local[thr], "grid_tune": grid_t, "grid_final": grid_f}
+        lg(f"HOLDOUT {name}: thr={thr} (tuned on {len(tune_sids):,}) -> final-half macro F0.5 = {grid_f[thr]:.5f} "
+           f"| tune-half {grid_t[thr]:.5f} | hold-only ownership {grid_local[thr]:.5f}")
         hk = hk.assign(**{f"p_{name}": p})
     recall_ceiling = len(set(zip(hk.sid, hk.tid)) & set(zip(hd["lab"].sid, hd["lab"].tid))) / max(len(hd["lab"]), 1)
-    metrics = {"holdout_macro_f05": res["stage2"]["macro_f05"], "threshold": res["stage2"]["threshold"],
-               "params": {"n_train": n_train, "rounds": rounds, "leaves": leaves, "lr": lr, "hold_mod": hold_mod},
-               "stage1": res["stage1"], "stage2": res["stage2"], "holdout_s1": len(hold_sids),
-               "candidate_link_recall": recall_ceiling,
+    metrics = {"holdout_macro_f05": res["stage2"]["final_macro_f05"], "threshold": res["stage2"]["threshold"],
+               "params": {"n_train": n_train, "rounds": rounds, "leaves": leaves, "lr": lr, "hold_mod": hold_mod,
+                          "chunks": chunks, "seed": seed},
+               "labels": label_stats, "stage1": res["stage1"], "stage2": res["stage2"],
+               "holdout_s1": len(hold_sids), "tune_s1": len(tune_sids), "final_s1": len(final_sids),
+               "candidate_link_recall": recall_ceiling, "feature_names_stage1": FEATS, "feature_names_stage2": FEATS2,
                "importance2": dict(zip(FEATS2, m2.feature_importance("gain").round().tolist())),
                "seconds": time.time() - t0}
     out = Path(work) / "model"
@@ -306,32 +383,60 @@ def train(work, gt_path, n_train=300_000, hold_mod=22, mem="20GB", threads=None,
     m2.save_model(str(out / "lgb2.txt"))
     hk.assign(y=hd["y"], p=hk["p_stage2"]).to_parquet(out / "hold_preds.parquet", index=False)
     pd.DataFrame({"sid": hold_sids}).to_parquet(out / "hold_sids.parquet", index=False)
+    # Persist split membership by entity id (DuckDB's hash() may change across versions).
+    ids = con.execute("SELECT r.entity_id, r.rid, s.g FROM split s JOIN rec r ON r.rid = s.sid WHERE s.g IS NOT NULL").df()
+    ids["half"] = np.where(ids.rid.isin(tune_set), "tune", np.where(ids.g == "hold", "final", ""))
+    ids[["entity_id", "g", "half"]].to_parquet(out / "split_ids.parquet", index=False)
     (out / "metrics.json").write_text(json.dumps(metrics, indent=1))
     return metrics
 
 
-def predict(work, split, out_dir, mem="20GB", threads=None, chunks=8, tmp=None):
-    t0 = time.time()
-    md = Path(work) / "model"
+def load_models(model_dir):
+    """Load the three boosters and refuse any whose feature list differs from this code's."""
+    md = Path(model_dir)
     m1 = [lgb.Booster(model_file=str(md / f"lgb_{g}.txt")) for g in "AB"]
     m2 = lgb.Booster(model_file=str(md / "lgb2.txt"))
+    for m, want, name in ((m1[0], FEATS, "lgb_A"), (m1[1], FEATS, "lgb_B"), (m2, FEATS2, "lgb2")):
+        if m.feature_name() != list(want):
+            raise ValueError(f"{name}.txt was trained with {m.num_feature()} features that differ from this code's "
+                             f"{len(want)}; use the git tag the model was built with, or retrain")
     thr = json.loads((md / "metrics.json").read_text())["threshold"]
+    check_scores([], thr)
+    return m1, m2, thr
+
+
+def predict(work, split, out_dir, mem="20GB", threads=None, chunks=8, tmp=None):
+    if not isinstance(chunks, int) or chunks < 1:
+        raise ValueError(f"chunks must be a positive int, got {chunks!r}")
+    t0 = time.time()
+    m1, m2, thr = load_models(Path(work) / "model")  # fail before any expensive work
     con = _connect(work, split, mem, threads)
-    tmp = Path(tmp or Path(scratch(work)) / "tmp_fe")
-    tmp.mkdir(parents=True, exist_ok=True)
-    keys, p1 = _predict_stage1(con, m1, "TRUE", threads, chunks, tmp=tmp, tag="x")
-    _context(con, keys.sid.values, keys.tid.values, p1)
-    p2, off = [], 0
-    for k in range(chunks):
-        X = np.load(tmp / f"x{k}.npy")
-        kk = keys.iloc[off:off + len(X)]
-        off += len(X)
-        p2.append(m2.predict(np.hstack([X, _ctx_matrix(con, kk)]), num_threads=threads or 0))
-        print(f"  [stage2 {split}] chunk {k + 1}/{chunks} {time.time() - t0:.0f}s", flush=True)
-    shutil.rmtree(tmp, ignore_errors=True)
+    # Run-owned temp dir: cleanup can only ever delete what this call created.
+    Path(tmp or scratch(work)).mkdir(parents=True, exist_ok=True)
+    own = Path(tempfile.mkdtemp(prefix="fe_", dir=tmp or scratch(work)))
+    try:
+        keys, p1 = _predict_stage1(con, m1, "TRUE", threads, chunks, tmp=own, tag="x")
+        check_scores(p1, name="stage-1 test scores")
+        _context(con, keys.sid.values, keys.tid.values, p1)
+        p2, off = [], 0
+        for k in range(chunks):
+            f = own / f"x{k}.npy"
+            if not f.exists():  # empty chunk: no candidates in this bucket
+                continue
+            X = np.load(f)
+            kk = keys.iloc[off:off + len(X)]
+            off += len(X)
+            p2.append(m2.predict(np.hstack([X, _ctx_matrix(con, kk)]), num_threads=threads or 0))
+            print(f"  [stage2 {split}] chunk {k + 1}/{chunks} {time.time() - t0:.0f}s", flush=True)
+        if off != len(keys):
+            raise RuntimeError(f"stage-2 consumed {off} rows but stage 1 produced {len(keys)}")
+    finally:
+        shutil.rmtree(own, ignore_errors=True)
+    p2 = np.concatenate(p2) if p2 else np.empty(0)
+    check_scores(p2, name="stage-2 test scores")
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame({"sid": keys.sid.values, "tid": keys.tid.values, "p1": p1, "p": np.concatenate(p2)}).to_parquet(
+    pd.DataFrame({"sid": keys.sid.values, "tid": keys.tid.values, "p1": p1, "p": p2}).to_parquet(
         out / "scores.parquet", index=False)
     del keys, p1, p2
     n_match, n_s1 = write_outputs(con, out / "scores.parquet", thr, out)
@@ -344,7 +449,12 @@ def write_outputs(con, scores_path, thr, out, chunks=16):
     Every S1 in `rec` gets exactly one row; lists may be empty. Aggregation runs in S1 chunks
     so memory stays bounded. Returns (links, S1 rows)."""
     out = Path(out)
-    con.execute(f"CREATE OR REPLACE TABLE sc AS SELECT sid, tid, p FROM read_parquet('{scores_path}')")
+    con.execute(f"CREATE OR REPLACE TABLE sc AS SELECT sid, tid, p FROM read_parquet({lit(scores_path)})")
+    bad = con.execute("SELECT count(*) FROM sc WHERE p IS NULL OR isnan(p) OR p < 0 OR p > 1 OR sid IS NULL OR tid IS NULL").fetchone()[0]
+    dup = con.execute("SELECT count(*) - count(DISTINCT (sid, tid)) FROM sc").fetchone()[0]
+    if bad or dup:
+        raise ValueError(f"scores table invalid: {bad} bad rows, {dup} duplicate pairs")
+    check_scores([], thr)
     con.execute(f"""CREATE OR REPLACE TABLE pr AS SELECT sid, tid FROM (
           SELECT sid, tid, row_number() OVER (PARTITION BY tid ORDER BY p DESC, sid) AS r
           FROM sc WHERE p >= {thr}) WHERE r = 1""")
@@ -369,10 +479,7 @@ def rewrite(work, split, scores_path, out, thr=None, mem="8GB", threads=None):
     """Re-emit both TSVs from a saved scores.parquet (e.g. after a crash or to try another threshold)."""
     thr = thr if thr is not None else json.loads((Path(work) / "model" / "metrics.json").read_text())["threshold"]
     con = duckdb.connect()
-    con.execute(f"SET memory_limit='{mem}'; SET preserve_insertion_order=false")
-    con.execute(f"SET temp_directory='{Path(scratch(work)) / 'duck_tmp'}'")
-    if threads:
-        con.execute(f"SET threads={threads}")
-    con.execute(f"CREATE TABLE rec AS SELECT rid, entity_id, src FROM read_parquet('{Path(work) / split}/norm_s*.parquet')")
+    configure(con, mem, threads, Path(scratch(work)) / "duck_tmp")
+    con.execute(f"CREATE TABLE rec AS SELECT rid, entity_id, src FROM read_parquet({lit(Path(work) / split / 'norm_s*.parquet')})")
     n_match, n_s1 = write_outputs(con, scores_path, thr, out)
     print(f"[rewrite {split}] thr={thr} {n_s1:,} rows, {n_match:,} links ({n_match / n_s1:.2f}/S1)", flush=True)

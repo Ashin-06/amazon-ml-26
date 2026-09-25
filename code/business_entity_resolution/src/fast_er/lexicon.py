@@ -15,18 +15,18 @@ import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from .model import hold_rule
+from .model import hold_rule, lit
 from .prep import core_of
 
 
 def build_lexicon(work, gt_path, hold_mod=22, min_count=3, min_share=0.5, split="train"):
     w = Path(work) / split
     con = duckdb.connect()
-    con.execute(f"CREATE VIEW rec AS SELECT * FROM read_parquet('{w}/norm_s*.parquet')")
+    con.execute(f"CREATE VIEW rec AS SELECT * FROM read_parquet({lit(w / 'norm_s*.parquet')})")
     rows = con.execute(f"""
         SELECT a.name, b.name FROM (
           SELECT source1_entity_id s, unnest(string_split(matched_entity_ids, ',')) t
-          FROM '{gt_path}' WHERE coalesce(matched_entity_ids, '') <> '') g
+          FROM read_parquet({lit(gt_path)}) WHERE coalesce(matched_entity_ids, '') <> '') g
         JOIN rec a ON a.entity_id = g.s JOIN rec b ON b.entity_id = g.t
         WHERE b.na AND NOT {hold_rule('a.entity_id', hold_mod)}""").fetchall()
     pair, tot = defaultdict(Counter), Counter()
