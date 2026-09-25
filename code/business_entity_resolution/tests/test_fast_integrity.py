@@ -143,7 +143,7 @@ def completed_pipeline(tmp_path_factory):
     convert(data, pq)
     run(args(pq, work, 'train'))
     run(args(pq, work, 'test'))
-    model.train(work, pq/'train_ground_truth.parquet', n_train=70, hold_mod=4,
+    model.train(work, pq/'train_ground_truth.parquet', n_train=70, hold_mod=4, backend='lgb',
                 mem='512MB', threads=1, rounds=3, chunks=7, leaves=7)
     model.predict(work, 'test', root/'out', mem='512MB', threads=1, chunks=7)
     return root

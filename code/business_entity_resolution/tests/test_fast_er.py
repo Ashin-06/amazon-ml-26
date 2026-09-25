@@ -21,6 +21,9 @@ def test_norm_canonicalizes_noise():
     assert norm(None) == "" and norm("") == ""
     assert norm("अरिहंत") != ""  # native script is transliterated, not dropped
     assert core_of(norm("Taran It Pvt Ltd")) == "taran it"
+    # French region vs departement components share one code; street names stay untouched
+    assert norm("4 Rue du Nord, Lille, Nord", states=True) == "4 r du nord lille frhdf"
+    assert norm("19 R. Berthelot, Merignac, Gironde", states=True) == norm("19 R. Berthelot, Merignac, Nouvelle-Aquitaine", states=True)
 
 
 def test_clean_name_phone_and_alias():
@@ -28,6 +31,8 @@ def test_clean_name_phone_and_alias():
     assert clean_name("Veowex a/k/a Sbs & Brothers Private Limited") == "Sbs & Brothers Private Limited"
     assert clean_name("Zetatavo DBA Surya It Pvt Ltd") == "Surya It Pvt Ltd"
     assert clean_name("Kaka Traders") == "Kaka Traders"  # 'aka' inside a word is not a marker
+    assert clean_name("Ciraveo née Dunkerque Musique SAS") == "Dunkerque Musique SAS"
+    assert clean_name("NEE College SAS") == "NEE College SAS"  # French marker needs a preceding brand
     assert clean_name(None) is None
 
 

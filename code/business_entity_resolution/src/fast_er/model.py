@@ -30,6 +30,8 @@ from rapidfuzz import fuzz
 from rapidfuzz.distance import JaroWinkler
 from rapidfuzz.process import cpdist
 
+from .prep import skeleton
+
 from .integrity import code_digest, digest, environment, files_digest, seal, verify, verify_stage
 from .validation import load_truth, validate_pairs, validate_records
 
@@ -63,7 +65,7 @@ BASE = ["s", "sn", "sa", "nk", "r_s", "r_n", "r_a", "n_c", "s_rel", "s_gap", "t_
 FEATS = BASE + ["n_ratio", "n_tsort", "n_tset", "n_partial", "n_jw", "c_ratio", "c_tset", "c_nospace",
                 "c_exact", "a_ratio", "a_tsort", "a_tset", "a_partial", "t_addr_empty", "len_n_s", "len_n_t",
                 "len_a_s", "len_a_t", "num_jac", "num_common", "num_conflict", "num_first_eq", "s_num_cnt",
-                "t_num_cnt", "hn_ratio", "hn_rel", "raw_ratio", "raw_partial", "sup_core", "sup_addr"]
+                "t_num_cnt", "hn_ratio", "hn_rel", "raw_ratio", "raw_partial", "sup_core", "sup_addr", "skel_ratio"]
 CTX = ["p1", "p1_rank", "p1_max", "p1_sum", "p1_n05", "p1_rel", "p1_trank", "p1_tother", "p1_tdiff", "p1_tn05",
        "p1_srank", "p1_sn05", "p1_smax", "anc_name", "anc_core", "anc_addr", "anc_n"]
 FEATS2 = FEATS + CTX
@@ -118,6 +120,10 @@ def features(df, threads=1):
     cols["c_exact"] = np.fromiter((x == y for x, y in zip(sc, tc)), np.float32, len(sc))
     rs, rt = df["srawn"].tolist(), df["trawn"].tolist()
     cols.update(raw_ratio=d(rs, rt, fuzz.ratio), raw_partial=d(rs, rt, fuzz.partial_ratio))
+    ks, kt = df["sskel"].tolist(), df["tskel"].tolist()
+    skel = d(ks, kt, fuzz.ratio)
+    skel[(df["sskel"].to_numpy() == "") | (df["tskel"].to_numpy() == "")] = -1
+    cols["skel_ratio"] = skel
     # Cluster support: true matches come in groups of near-identical variants; decoys stand alone.
     cols["sup_core"] = df.groupby(["sid", "tcore"]).sid.transform("size").to_numpy(np.float32)
     sup_a = df.groupby(["sid", "taddr"]).sid.transform("size").to_numpy(np.float32)
@@ -135,8 +141,8 @@ def features(df, threads=1):
 def _pairs(con, where):
     """Candidate rows (with group features) joined to both records' normalized text."""
     return con.execute(f"""
-        SELECT c.*, a.name AS sname, a.core AS scor, a.addr AS saddr, a.rawn AS srawn,
-               b.name AS tname, b.core AS tcore, b.addr AS taddr, b.src AS tsrc, b.rawn AS trawn,
+        SELECT c.*, a.name AS sname, a.core AS scor, a.addr AS saddr, a.rawn AS srawn, a.skel AS sskel,
+               b.name AS tname, b.core AS tcore, b.addr AS taddr, b.src AS tsrc, b.rawn AS trawn, b.skel AS tskel,
                a.fc_t AS s_fct, a.fc_s AS s_fcs, a.fa_t AS s_fat,
                b.fc_t AS t_fct, b.fc_s AS t_fcs, b.fa_t AS t_fat
         FROM c JOIN rec a ON a.rid = c.sid JOIN rec b ON b.rid = c.tid WHERE {where}
@@ -180,6 +186,13 @@ def _connect(work, split, mem, threads):
     validate_records(con)
     if "rawn" not in [r[0] for r in con.execute("DESCRIBE rec").fetchall()]:
         raise ValueError("Prepared data lacks raw-name features; rebuild")
+    # Phonetic skeleton of the (post-lexicon) core name, computed once per record.
+    sk = con.execute("SELECT rid, core FROM rec").df()
+    sk["skel"] = [skeleton(x) for x in sk.core.tolist()]
+    con.register("skdf", sk[["rid", "skel"]])
+    con.execute("CREATE OR REPLACE TABLE rec AS SELECT r.*, k.skel FROM rec r JOIN skdf k USING (rid)")
+    con.unregister("skdf")
+    del sk
     con.execute(GROUP_SQL.format(cands=lit(w / "cands.parquet")))
     validate_pairs(con, "c")
     return con
@@ -338,11 +351,17 @@ def _fit(backend, P, X, y, w, names, rounds, valid=None):
           "max_leaves": P["num_leaves"], "grow_policy": "lossguide", "max_depth": 0, "min_child_weight": 5,
           "subsample": 0.8, "colsample_bytree": 0.8, "reg_lambda": 1.0, "max_bin": 256, "seed": P["seed"],
           "nthread": P["num_threads"] or 1, "verbosity": 1}
+    # No evaluation set: it only produced log lines and costs GPU memory.
     d = xgb.QuantileDMatrix(X, y, weight=w, feature_names=list(names))  # quantized: ~1 byte per value
-    ev = []
-    if valid is not None:
-        ev = [(xgb.QuantileDMatrix(valid[0], valid[1], ref=d, feature_names=list(names)), "hold")]
-    return xgb.train(xp, d, rounds, evals=ev, verbose_eval=100 if ev else False)
+    try:
+        return xgb.train(xp, d, rounds)
+    except xgb.core.XGBoostError as e:
+        if xp["device"] != "cuda" or "memory" not in str(e).lower():
+            raise
+        print(f"  [xgboost] GPU out of memory ({len(y):,} rows); retrying this booster on CPU", flush=True)
+        xp["device"] = "cpu"
+        del d
+        return xgb.train(xp, xgb.QuantileDMatrix(X, y, weight=w, feature_names=list(names)), rounds)
 
 
 def _pred(m, X, threads=None):
@@ -455,8 +474,14 @@ def evaluate_threshold(sid, tid, p, truth, tune_sids, final_sids, grid=None):
     """Choose with tune labels, then evaluate final labels exactly once."""
     if not tune_sids or not final_sids or set(tune_sids) & set(final_sids):
         raise ValueError("Tune and final sets must be nonempty and disjoint")
+    refine = grid is None  # an explicit grid is used exactly as given
     grid = grid if grid is not None else [round(float(t), 3) for t in np.arange(.2, .96, .025)]
     scores = {t: macro_f05(truth, decide(sid, tid, p, t), tune_sids) for t in grid}
+    best = max(scores, key=lambda t: (scores[t], t))
+    for t in (np.arange(max(0.0, best - 0.02), min(1.0, best + 0.02) + 1e-9, 0.0025) if refine else []):
+        t = round(float(t), 4)  # refinement around the best coarse value, tune labels only
+        if t not in scores:
+            scores[t] = macro_f05(truth, decide(sid, tid, p, t), tune_sids)
     threshold = max(scores, key=lambda t: (scores[t], t))
     final = macro_f05(truth, decide(sid, tid, p, threshold), final_sids)
     return {"threshold": threshold, "tune_macro_f05": scores[threshold],
@@ -474,7 +499,7 @@ def model_path(work, name):
 
 
 def train(work, gt_path, n_train=300_000, hold_mod=22, mem="20GB", threads=None, seed=26, rounds=600,
-          chunks=8, leaves=127, lr=0.05, weight="none", backend="lgb", model_dir="model"):
+          chunks=8, leaves=127, lr=0.05, weight="none", backend="auto", model_dir="model"):
     """Fit classifiers and stacker, then evaluate disjoint tune/final reference groups.
 
     Stacker inputs use classifier-level cross-fitting. The learned lexicon uses

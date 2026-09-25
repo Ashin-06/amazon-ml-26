@@ -19,7 +19,8 @@ if __name__ == "__main__":
     ap.add_argument("--chunks", type=int, default=8)
     ap.add_argument("--leaves", type=int, default=127); ap.add_argument("--lr", type=float, default=0.05)
     ap.add_argument("--weight", choices=("none","ref","sqrt"), default="none")
-    ap.add_argument("--backend", choices=("lgb","xgb","auto"), default="lgb")
+    ap.add_argument("--backend", choices=("lgb","xgb","auto"), default="auto",
+                    help="auto = XGBoost on GPU when one is usable (CPU retry on GPU OOM), else LightGBM on CPU")
     ap.add_argument("--seed", type=int, default=26)
     ap.add_argument("--model-dir", default="model")
     a = ap.parse_args()
