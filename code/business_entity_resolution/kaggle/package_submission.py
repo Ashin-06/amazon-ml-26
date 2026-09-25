@@ -32,6 +32,8 @@ if doc.read_text(encoding="utf-8").lstrip().startswith("<!-- DRAFT"):
 
 files = {f"output/{n}": out_dir / n for n in ("matching_results.tsv", "candidate_pairs.tsv")}
 files["Documentation_template.md"] = doc
+if Path("docs/METHODOLOGY_DETAILS.md").is_file():
+    files["METHODOLOGY_DETAILS.md"] = Path("docs/METHODOLOGY_DETAILS.md")
 for p in sorted(pkg.rglob("*")):
     rel = p.relative_to(pkg)
     if (not p.is_file() or p.is_symlink() or "__pycache__" in rel.parts or DENY.search(rel.as_posix())
