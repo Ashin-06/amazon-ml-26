@@ -12,6 +12,7 @@ from pathlib import Path
 ap = argparse.ArgumentParser()
 ap.add_argument("out"); ap.add_argument("owner"); ap.add_argument("slug"); ap.add_argument("stages")
 ap.add_argument("--s1", default=""); ap.add_argument("--s3", default=""); ap.add_argument("--reuse")
+ap.add_argument("--no-internet", action="store_true")
 a = ap.parse_args()
 src = Path(__file__).resolve().parent.parent / "src" / "fast_er"
 out = Path(a.out)
@@ -63,7 +64,7 @@ out.mkdir(parents=True, exist_ok=True)
 (out / "script.py").write_text(body, encoding="utf-8")
 meta = {"id": f"{a.owner}/{a.slug}", "title": a.slug.replace("-", " "), "code_file": "script.py", "language": "python",
         "kernel_type": "script", "is_private": True, "enable_gpu": False, "enable_tpu": False,
-        "enable_internet": True, "dataset_sources": [f"{a.owner}/amlc26-data"], "competition_sources": [],
+        "enable_internet": not a.no_internet, "dataset_sources": [f"{a.owner}/amlc26-data"], "competition_sources": [],
         "kernel_sources": [a.reuse] if a.reuse else []}
 (out / "kernel-metadata.json").write_text(json.dumps(meta, indent=1), encoding="utf-8")
 print("built", out / "script.py", len(body), "bytes")
