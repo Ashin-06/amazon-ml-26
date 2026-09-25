@@ -937,14 +937,23 @@ _xgb_params(P, device)
 
 XGBoost settings equivalent to the LightGBM parameters in P.
 
+### `_cupy`
+
+```python
+_cupy()
+```
+
+CuPy module when installed and a CUDA GPU is usable, else None (then XGBoost copies host data).
+
 ### `_xgb_train`
 
 ```python
 _xgb_train(P, make, n, rounds)
 ```
 
-Train on the GPU when usable; if the GPU runs out of memory, rebuild the matrix and train on CPU.
-`make` builds the quantized matrix (~1 byte per value); no evaluation set (it only cost GPU memory).
+Train on the GPU when usable; if the GPU runs out of memory, rebuild the matrix on the host and
+train on CPU. `make(gpu)` builds the quantized matrix (~1 byte per value; built directly in GPU memory
+from CuPy blocks when gpu is True). No evaluation set (it only cost GPU memory).
 
 ### `_fit`
 
@@ -1085,8 +1094,9 @@ _train(work, gt_path, n_train, hold_mod, mem, threads, seed, rounds, chunks, lea
 Body of train(); `own` is the scratch directory for cached stage-1 matrices.
 
 Every training candidate (all references: fit groups A/B, holdout, others) is featurized exactly once,
-one sid-slice at a time; matrices live on disk and boosters read them block by block. n_train above
-the number of non-holdout references means all of them.
+one sid-slice at a time; matrices live on disk and boosters read them block by block. n_train sets the
+stage-1 references (A + B; above the non-holdout count means all); stage 2 always learns from every
+non-holdout reference, with easy negatives sampled (EASY_P / EASY_KEEP).
 
 ### `load_models`
 

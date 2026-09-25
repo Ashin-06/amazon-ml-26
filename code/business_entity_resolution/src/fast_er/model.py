@@ -71,6 +71,10 @@ CTX = ["p1", "p1_rank", "p1_max", "p1_sum", "p1_n05", "p1_rel", "p1_trank", "p1_
        "p1_srank", "p1_sn05", "p1_smax", "anc_name", "anc_core", "anc_addr", "anc_n"]
 FEATS2 = FEATS + CTX
 ANCHOR_P, ANCHOR_K, ANCHOR_MIN = 0.3, 4, 0.02
+# Stage 2 trains on every non-holdout reference. Negatives the stage-1 models already score below EASY_P
+# (~91% of candidates, holding <0.01% of true links) are sampled at EASY_KEEP with weight 1/EASY_KEEP, so
+# the training matrix fits a 6 GB GPU while the loss stays unbiased.
+EASY_P, EASY_KEEP = 0.001, 0.1
 
 CTX_SQL = """
 SELECT sid, tid, p1,
@@ -359,20 +363,38 @@ def _xgb_params(P, device):
             "max_bin": 256, "seed": P["seed"], "nthread": P["num_threads"] or 1, "verbosity": 1}
 
 
+def _cupy():
+    """CuPy module when installed and a CUDA GPU is usable, else None (then XGBoost copies host data)."""
+    if not gpu_available():
+        return None
+    try:
+        import cupy
+        return cupy
+    except ImportError:
+        return None
+
+
 def _xgb_train(P, make, n, rounds):
-    """Train on the GPU when usable; if the GPU runs out of memory, rebuild the matrix and train on CPU.
-    `make` builds the quantized matrix (~1 byte per value); no evaluation set (it only cost GPU memory)."""
+    """Train on the GPU when usable; if the GPU runs out of memory, rebuild the matrix on the host and
+    train on CPU. `make(gpu)` builds the quantized matrix (~1 byte per value; built directly in GPU memory
+    from CuPy blocks when gpu is True). No evaluation set (it only cost GPU memory)."""
     import xgboost as xgb
     device = "cuda" if gpu_available() else "cpu"
-    d = make()
     try:
+        d = make(device == "cuda")
+        cp = _cupy()
+        if cp is not None:
+            cp.get_default_memory_pool().free_all_blocks()  # staging blocks must not starve XGBoost
         return xgb.train(_xgb_params(P, device), d, rounds)
-    except xgb.core.XGBoostError as e:
+    except Exception as e:  # XGBoostError or CuPy OutOfMemoryError
         if device != "cuda" or "memory" not in str(e).lower():
             raise
         print(f"  [xgboost] GPU out of memory ({n:,} rows); retrying this booster on CPU", flush=True)
-        del d
-        return xgb.train(_xgb_params(P, "cpu"), make(), rounds)
+        d = None
+        cp = _cupy()
+        if cp is not None:
+            cp.get_default_memory_pool().free_all_blocks()
+        return xgb.train(_xgb_params(P, "cpu"), make(False), rounds)
 
 
 def _fit(backend, P, X, y, w, names, rounds, valid=None):
@@ -382,7 +404,7 @@ def _fit(backend, P, X, y, w, names, rounds, valid=None):
         return lgb.train(P, lgb.Dataset(X, y, feature_name=list(names), weight=w), rounds, valid_sets=vs,
                          callbacks=[lgb.log_evaluation(100)] if vs else [])
     import xgboost as xgb
-    return _xgb_train(P, lambda: xgb.QuantileDMatrix(X, y, weight=w, feature_names=list(names)), len(y), rounds)
+    return _xgb_train(P, lambda gpu: xgb.QuantileDMatrix(X, y, weight=w, feature_names=list(names)), len(y), rounds)
 
 
 def _fit_parts(backend, P, loaders, y, w, names, rounds):
@@ -394,8 +416,9 @@ def _fit_parts(backend, P, loaders, y, w, names, rounds):
     import xgboost as xgb
 
     class Blocks(xgb.DataIter):
-        def __init__(self):
+        def __init__(self, cp):
             self.i = self.off = 0
+            self.cp = cp
             super().__init__()
 
         def next(self, input_data):
@@ -403,8 +426,12 @@ def _fit_parts(backend, P, loaders, y, w, names, rounds):
                 return False
             X = loaders[self.i]()
             n = len(X)
-            input_data(data=X, label=y[self.off:self.off + n], feature_names=list(names),
-                       weight=None if w is None else w[self.off:self.off + n])
+            lab = y[self.off:self.off + n].astype(np.float32)
+            wt = None if w is None else w[self.off:self.off + n]
+            if self.cp is not None:  # build the quantized matrix directly in GPU memory
+                X, lab = self.cp.asarray(X), self.cp.asarray(lab)
+                wt = None if wt is None else self.cp.asarray(wt)
+            input_data(data=X, label=lab, feature_names=list(names), weight=wt)
             self.i, self.off = self.i + 1, self.off + n
             return True
 
@@ -413,13 +440,19 @@ def _fit_parts(backend, P, loaders, y, w, names, rounds):
                 raise ValueError("Streamed rows do not match the labels")
             self.i = self.off = 0
 
-    return _xgb_train(P, lambda: xgb.QuantileDMatrix(Blocks(), max_bin=256), len(y), rounds)
+    return _xgb_train(P, lambda gpu: xgb.QuantileDMatrix(Blocks(_cupy() if gpu else None), max_bin=256), len(y), rounds)
 
 
 def _pred(m, X, threads=None):
     """Match probability for the rows of X, from either booster type."""
     if isinstance(m, lgb.Booster):
         return m.predict(X, num_threads=threads or 1)
+    cp = _cupy()
+    if cp is not None and len(X):  # predict on the GPU from a GPU copy (no slow host-DMatrix fallback)
+        m.set_param({"device": "cuda"})
+        out = cp.asnumpy(m.inplace_predict(cp.asarray(X))).astype(np.float64)
+        cp.get_default_memory_pool().free_all_blocks()
+        return out
     return np.asarray(m.inplace_predict(X), dtype=np.float64)
 
 
@@ -574,8 +607,9 @@ def _train(work, gt_path, n_train, hold_mod, mem, threads, seed, rounds, chunks,
     """Body of train(); `own` is the scratch directory for cached stage-1 matrices.
 
     Every training candidate (all references: fit groups A/B, holdout, others) is featurized exactly once,
-    one sid-slice at a time; matrices live on disk and boosters read them block by block. n_train above
-    the number of non-holdout references means all of them."""
+    one sid-slice at a time; matrices live on disk and boosters read them block by block. n_train sets the
+    stage-1 references (A + B; above the non-holdout count means all); stage 2 always learns from every
+    non-holdout reference, with easy negatives sampled (EASY_P / EASY_KEEP)."""
     _check_args(n_train, hold_mod, chunks, rounds)
     P = _params(threads, seed, leaves, lr)
     if weight not in ("none", "ref", "sqrt"):
@@ -664,8 +698,17 @@ def _train(work, gt_path, n_train, hold_mod, mem, threads, seed, rounds, chunks,
     del p1p
     # Complete lists, so per-reference support and target competition equal the production definitions.
     _context(con, sid, tid, p1, chunks=chunks, threads=threads)
-    del p1
-    fit2 = grp <= 1
+    # Stage 2: every non-holdout reference (A/B with out-of-fold p1, the rest with the production mean);
+    # trivially easy negatives are sampled (deterministic, seeded) and up-weighted.
+    fit2 = grp != 2
+    w2 = pair_weights(sid[fit2], weight)
+    w2 = np.ones(int(fit2.sum()), np.float32) if w2 is None else w2
+    easy = (p1[fit2] < EASY_P) & (y[fit2] == 0)
+    kept = ~easy | (np.random.default_rng(seed).random(int(fit2.sum())) < EASY_KEEP)
+    w2 = (w2 * np.where(easy, 1 / EASY_KEEP, 1)).astype(np.float32)[kept]
+    fit2[np.flatnonzero(fit2)[~kept]] = False
+    lg(f"stage 2 rows: {int(fit2.sum()):,} ({int(easy.sum()):,} easy negatives sampled at {EASY_KEEP})")
+    del easy, kept, p1
     ctx = {}
     for i in range(len(files)):
         s = fit2[bounds[i]:bounds[i + 1]]
@@ -676,7 +719,7 @@ def _train(work, gt_path, n_train, hold_mod, mem, threads, seed, rounds, chunks,
     con.execute("DROP TABLE IF EXISTS anc; DROP TABLE IF EXISTS anchors; DROP TABLE IF EXISTS ctx; DROP TABLE IF EXISTS p1tab")
     lg("stage-2 context built")
     # Hold labels never reach the learner, early stopping or a training log.
-    m2 = _fit_parts(backend, P, loaders(fit2, ctx), y[fit2], pair_weights(sid[fit2], weight), FEATS2, rounds)
+    m2 = _fit_parts(backend, P, loaders(fit2, ctx), y[fit2], w2, FEATS2, rounds)
     for c in ctx.values():
         c.unlink()
     lg("stage-2 model fitted")
@@ -707,7 +750,9 @@ def _train(work, gt_path, n_train, hold_mod, mem, threads, seed, rounds, chunks,
                "params": {"n_train": n_train, "rounds": rounds, "leaves": leaves, "lr": lr, "hold_mod": hold_mod,
                           "chunks": chunks, "seed": seed, "weight": weight, "backend": backend,
                           "gpu": bool(backend == "xgb" and gpu_available())},
-               "references_fit": {"A": int(counts["A"]), "B": int(counts["B"])},
+               "references_fit": {"A": int(counts["A"]), "B": int(counts["B"]),
+                                  "stage2": int(sum(v for g, v in counts.items() if g != "hold"))},
+               "stage2_sampling": {"easy_p": EASY_P, "easy_keep": EASY_KEEP},
                "labels": label_stats, "stage2": res["stage2"],
                "evaluation": "One final evaluation; production scores/global ownership; competitor pool includes fitted references.",
                "cross_fit_scope": "classifier only; lexicon fitted on all non-hold references",
