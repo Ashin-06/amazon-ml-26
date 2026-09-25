@@ -614,6 +614,42 @@ blocking_recall(split='train', work='work', gt_path='work/pq/train_ground_truth.
 
 Train-only: link recall and oracle macro F0.5 (empty prediction for singletons = 1.0).
 
+## fast_er/db.py
+
+Shared DuckDB/SQL helpers used by candidate generation (stage 1) and the matcher (stage 3).
+
+### `lit`
+
+```python
+lit(value)
+```
+
+SQL string literal with quotes escaped (paths may contain apostrophes).
+
+### `normalized_sql`
+
+```python
+normalized_sql(directory)
+```
+
+Explicit three-file parquet expression; never ingest an unmanifested wildcard match.
+
+### `configure`
+
+```python
+configure(con, mem, threads, temp_dir)
+```
+
+Validated DuckDB resource settings.
+
+### `hold_rule`
+
+```python
+hold_rule(col, hold_mod)
+```
+
+SQL predicate selecting holdout S1s (~1/hold_mod of references).
+
 ## fast_er/efficiency.py
 
 Read-only tuning diagnostics for candidate cost, recall and oracle macro F0.5.
@@ -727,10 +763,10 @@ Describe explicitly named files, refusing symlinks and duplicate basenames.
 ### `code_digest`
 
 ```python
-code_digest()
+code_digest(names=None)
 ```
 
-Fingerprint every fast-pipeline module, including its drivers and integrity rules.
+Fingerprint every fast-pipeline module (default), or only the named ones (stage-1 outputs).
 
 ### `environment`
 
@@ -851,30 +887,6 @@ _pairs(con, where)
 
 Candidate rows (with group features) joined to both records' normalized text.
 
-### `lit`
-
-```python
-lit(value)
-```
-
-SQL string literal with quotes escaped (paths may contain apostrophes).
-
-### `normalized_sql`
-
-```python
-normalized_sql(directory)
-```
-
-Explicit three-file parquet expression; never ingest an unmanifested wildcard match.
-
-### `configure`
-
-```python
-configure(con, mem, threads, temp_dir)
-```
-
-Validated DuckDB resource settings.
-
 ### `scratch`
 
 ```python
@@ -942,14 +954,6 @@ macro_f05(truth, pred, all_sids)
 ```
 
 Exact per-reference macro F0.5, retaining empty and unretrieved references.
-
-### `hold_rule`
-
-```python
-hold_rule(col, hold_mod)
-```
-
-SQL predicate selecting holdout S1s (~1/hold_mod of references).
 
 ### `_params`
 

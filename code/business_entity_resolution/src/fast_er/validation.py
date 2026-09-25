@@ -25,7 +25,7 @@ def validate_pairs(con, table):
 
 def load_truth(con, gt_path):
     """Require exactly one label row per S1, including empty lists, and unique target ownership."""
-    from .model import lit
+    from .db import lit
     validate_records(con)
     con.execute(f"CREATE OR REPLACE TABLE labels AS SELECT * FROM read_parquet({lit(gt_path)})")
     n_lab, unique_lab = con.execute("SELECT count(*), count(DISTINCT source1_entity_id) FROM labels").fetchone()

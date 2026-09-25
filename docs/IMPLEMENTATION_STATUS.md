@@ -28,4 +28,6 @@ Candidate set (organizer update: a smaller candidate_pairs.tsv per reference ran
 
 v17 features (India error analysis on v14's holdout): look-alike decoys at the same address keep the start of the distinctive first word and change its ending ("Prananth"/"Prananeon", "Gangya"/"Gangex"), while true typos are scattered edits; targets often get an extra number prepended to the address ("#27 c/o ..."), which made first-number comparisons compare a fake number. Added ft_lev / ft_len / ft_pre / ft_suf (reference first core token vs its closest target token: edit distance, shared start, shared ending) and hn_in_t / hn_t_in_s (each side's first number anywhere in the other address), computed in SQL. Stage-1 A/B on 4.3M labeled pairs (disjoint references): log-loss 0.00799 -> 0.00713, errors at 0.5 6,050 -> 5,452. Holdout F0.5 by country (v14): India 0.9760, US 0.9812; test is 46.8% India, 38.3% US, 15.0% France.
 
-Final regression result: 99 tests passed; zero failures/errors.
+Stage-1 outputs (normalized records, lexicon, candidates) are now fingerprinted by exactly the modules stage 1 runs (integrity.STAGE1_CODE: prep, lexicon, block, db, integrity, validation, run_stage1); a test checks that none of them imports the matcher. Matcher/feature changes therefore reuse verified candidates instead of re-blocking (~1.5 h per run); model and prediction manifests still fingerprint every module.
+
+Final regression result: 100 tests passed; zero failures/errors.

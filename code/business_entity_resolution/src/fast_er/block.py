@@ -22,7 +22,7 @@ from pathlib import Path
 
 import duckdb
 
-from .model import configure, lit, normalized_sql
+from .db import configure, lit, normalized_sql
 
 KEYS_SQL = """
 CREATE OR REPLACE TABLE keys AS

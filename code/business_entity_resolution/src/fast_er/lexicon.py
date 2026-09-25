@@ -15,7 +15,7 @@ import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from .model import hold_rule, lit, normalized_sql
+from .db import hold_rule, lit, normalized_sql
 from .prep import core_of, skeleton
 from .validation import load_truth
 from .integrity import digest
