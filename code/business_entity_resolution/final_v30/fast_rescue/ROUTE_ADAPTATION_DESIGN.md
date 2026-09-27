@@ -1,0 +1,3 @@
+# Route-specific follow-up
+
+The second-word route failed under the unchanged v28 classifier. Test exactly one adaptation: the same regularized logistic regression C=.1 on the union of old rescue tuning pairs and new-route tuning pairs, with an explicit route indicator. Grouped three-fold OOF, excluding targets already owned by frozen base/v28 rescues. Existing v28 decisions stay frozen; new model applies only to new-route additions. Cutoffs .50:.01:.99 and .995 chosen on tuning only. Gate +.00005 macro, positive lower paired interval and no country regression. No test or final inference without passing this gate. This is adaptive exploration on tuning, not independent confirmation.

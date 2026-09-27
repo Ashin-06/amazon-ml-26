@@ -1,0 +1,64 @@
+{
+  "as_of_ist": "2026-09-27T21:17:39+05:30",
+  "team": "Cardinality",
+  "members": [
+    "Ashin Murugan",
+    "Cherin Yacoob",
+    "Neha R",
+    "Harisankar G"
+  ],
+  "evaluated_best": {
+    "version": "v30_frxe2",
+    "public_score": 0.984718,
+    "matching": "submissions/v30_frxe2_matching_results.tsv",
+    "candidate": "work/comp/v25/candidate_pairs_v27.tsv",
+    "code_zip": "submissions/v30_code.zip",
+    "previous_best": {
+      "version": "v26",
+      "public_score": 0.98417
+    }
+  },
+  "remaining_team_uploads": 0,
+  "deadline_ist": "2026-09-27 23:59:00",
+  "prepared_unscored_candidate": {
+    "version": "v28fast_rescue",
+    "matching": "submissions\\v28fast_rescue_matching_results.tsv",
+    "candidate": "D:\\Amazon ML 26\\work\\comp\\v25\\candidate_pairs_v27.tsv",
+    "public_score": null,
+    "local_final_score": 0.9895825572394727,
+    "local_baseline": 0.9893496186790386,
+    "checks": {
+      "independent_validator_exit": 0,
+      "seconds": 94.42200000000048,
+      "files": {
+        "D:\\Amazon ML 26\\artifacts\\after-0982910-20260927\\fast_rescue_test_v1\\matching_results.tsv": {
+          "bytes": 97105642,
+          "sha256": "ee722e957dfb2d9379fdc65eeae842d7535586d2e6e20095a7a439b39673d68a"
+        },
+        "D:\\Amazon ML 26\\work\\comp\\v25\\candidate_pairs_v27.tsv": {
+          "bytes": 2358804802,
+          "sha256": "4162dba9b0881649032b608c1e50cbf3b740de9d1ee3b7e9283391366f66700f"
+        },
+        "D:\\Amazon ML 26\\code\\business_entity_resolution\\kaggle\\check_submission.py": {
+          "bytes": 5822,
+          "sha256": "bee62a0130509af8298ebc45976e73990dba493484841817797acf73bfbe62f6"
+        }
+      },
+      "scope": "Full supplied original IDs, coverage, format, unique target ownership and all candidate IDs/containment. Unmodified independent checker, bounded DuckDB memory. This is not an official full-candidate validator success."
+    },
+    "matching_sha256": "ee722e957dfb2d9379fdc65eeae842d7535586d2e6e20095a7a439b39673d68a",
+    "code_review_zip_sha256": "09115f7fdf9ace798c50b6804b9943ebe9cad0ec103eb0ab57d02d7f61bf7d60",
+    "France_accuracy": "Unlabelled; predictions identical to v27"
+  },
+  "round1_requirement": "matching TSV only; final ZIP is Round 2 per current organizer answers",
+  "xenc7": "Completed; original and US-only adoption rejected; not a new submission",
+  "current_report": "docs/FAST_RESCUE_TRAINING_2026-09-27.md",
+  "round2_package": "Incomplete standalone reproduction; existing ZIP is code/review only",
+  "latest_followup": {
+    "report": "docs\\V28_FOLLOWUP_EXPERIMENTS_2026-09-27.md",
+    "alternatives_tested": 5,
+    "adopted": 0,
+    "final_labels_opened": false,
+    "published_files_unchanged": true
+  }
+}

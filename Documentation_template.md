@@ -1,61 +1,123 @@
-<!-- DRAFT: fill team fields and the final selected run's numbers before submission -->
-# ML Challenge 2026: Business Entity Resolution Solution
+# ML Challenge 2026: Business Entity Resolution
 
-**Team Name:** [Your Team Name] · **Team Members:** [List all team members] · **Submission Date:** [Date]
+**Team:** Cardinality  
+**Members:** Ashin Murugan, Cherin Yacoob, Neha R, Harisankar G  
+**Date:** 27 September 2026  
+**Final selected submission:** `v30_frxe2_matching_results.tsv`, public score **0.984718** (best public; used for the
+private leaderboard). Round-2 standalone reproduction packaging is still to be completed.
 
-## 1. Executive Summary
-Blocking + learned matcher, built only on the supplied data. Records are normalized (transliteration, abbreviation
-and state canonicalization, alias/phone cleanup) and a **transliteration lexicon learned from the training labels**
-maps native-script Indian spellings to English. Candidates come from a bulk DuckDB join over hashed name, address and
-**name×address-word** keys. A **two-stage LightGBM** matcher scores pairs (stage 2 sees how each pair compares with
-competing candidates), each target is given to at most one reference, and the threshold maximizes macro F0.5.
+v30 combines the v28fast_rescue India/US decisions with a corrected French cross-encoder input normalization.
+v28fast_rescue uses a standardized logistic-regression rescue matcher (C=0.1, cutoff 0.69) on supplied name/address
+features; it raised the reused India/US final split from 0.989349619 to 0.989582557. See
+docs/FAST_RESCUE_TRAINING_2026-09-27.md and docs/FRANCE_OVERLAY_2026-09-27.md.
 
-## 2. Methodology
-**Problem analysis.** 2.2M train references vs 10.3M targets (test: 1.73M vs 10.0M, France only in test). Links average
-3.5 per reference; 5.6% of references have none; no target belongs to two references and no link crosses countries.
-Main noise: legal-suffix/typo/reordering name variants, "Brand DBA Real Name" aliases (2.4% of Source-3 names),
-appended phone numbers, Indian names in Devanagari/Bengali/Kannada/Tamil (28% of India S2 names), abbreviated or
-reordered addresses, zero-padded house numbers, 3–4% missing target addresses, and very generic Indian names shared
-by hundreds of businesses. **Approach type:** blocking + two-stage gradient-boosted classifier + one-owner assignment.
+## Executive summary
 
-## 3. Candidate Generation (Blocking)
-Keys per record, namespaced by country (open set, France included): name tokens, adjacent/whole-name concatenations
-(catch @handles/domains), whole core name, **name-token × address-word** composites ("pioneerinfotech|pune": keeps
-generic names blockable within their city), address tokens and bigrams. Keys held by >300 targets are dropped (1,000
-for whole names). Pairs are scored by summed idf; per reference we keep top-40 overall ∪ top-20 by name ∪ top-20 by
-address (≈49 candidates). **Full-train link recall 97.05%, perfect-matcher ceiling F0.5 0.9905.**
+We match every Source-1 record to zero or more Source-2/Source-3 records using
+only supplied business names, addresses and country fields. Bounded lexical
+blocking feeds two-stage boosted-tree matching, multilingual neural pair
+rescoring and a small correction model. Every target has at most one owner;
+a reference may own multiple targets. External business registries, geocoding
+lookups and hosted inference APIs are not used.
 
-## 4. Matching Model
-**Features (≈50):** RapidFuzz ratio / token-sort / token-set / partial / Jaro-Winkler on name, core name, raw joined
-name and address; digit-token agreement and house-number similarity; missing-address flags; how many records share
-the exact name/address; blocking scores and ranks; cluster support (candidates sharing the same name/address).
-**Model:** LightGBM (MIT). Stage 1: two models on disjoint reference halves give out-of-fold probabilities. Stage 2 adds
-context: the pair's rank and share within its reference and within its source, and the best competing reference's
-probability for the same target. **Decision:** probability ≥ τ, then each target goes to its single best reference
-(ties: lowest id). τ is tuned on half of a held-out reference set; F0.5 is reported on the other, untouched half.
+## Candidate generation
 
-## 5. Experiments & Results
-Holdout = ~100k training references never used for fitting or for the lexicon. "Final-half" = threshold tuned on one
-half, scored on the other (same protocol for all rows in the last column).
+Normalization uses offline transliteration, punctuation/number cleanup and
+multiple raw, normalized and legal-form-reduced name/address views. A lexicon
+learned from permitted training identities supports Indic-script variations.
+Country-partitioned name/address token and composite-key routes build candidate
+sets against the full supplied target pool, with route-specific frequency and
+ranking limits. v24 also includes retrieval for names with missing addresses.
 
-| Run | Change | Candidate recall / ceiling | Holdout F0.5 (tuned on hold) | Final-half F0.5 |
-|---|---|---|---|---|
-| v1 | token blocking + single LightGBM | 0.9145 / 0.9656 | 0.9422 | – |
-| v2 | + learned lexicon, frequency features, two-stage context | 0.9203 / 0.9680 | 0.9535 | – |
-| v3 | + number/ordinal/French normalization, short-token and whole-name keys | 0.9329 / 0.9735 | 0.9578 | – |
-| v4 | + name×address keys, larger candidate budget, house-number, raw-name and cluster features | 0.9664 / 0.9890 | 0.9762 | 0.9758 |
-| v10 | + short-name composites, whole-name cap, alias & phone cleanup, per-source context, per-reference weights | 0.9705 / 0.9905 | [TBD] | [TBD] |
+The v26 rescue route adds previously unretrieved pairs sharing the first core
+name word and the leading address number. Cheap name edit and address token-set
+similarities prune the route at a summed score of 1.5; a fixed 1.88 matcher
+threshold accepts the best unowned target links. These two thresholds have
+different roles. All retained route candidates, not merely accepted matches,
+are added to the exported candidate file. v27 extends this route to France.
 
-Also tested: expected-F0.5 subset selection and separate thresholds per country or for the top candidate (no gain);
-per-reference sample weights (small gain on a pilot). **Errors:** misses dominate (≈9 missed links per false link);
-64% of missed links were never retrieved; nearly half of those have an empty target address (often a generic name). False links are mainly
-a different business at the same or neighboring address. France has no labels: its predicted match rate (5.8% empty,
-3.4 links/reference) matches US/India.
+## Models and decisions
 
-## 6. Conclusion
-Recall was the main lever: at full scale plain token blocking lost 8.5% of true links on generic and native-script
-Indian names; a label-learned lexicon and name×city keys recovered most of them. A context-aware second stage, the
-one-owner constraint and a threshold tuned directly on macro F0.5 then handle the precision-weighted metric.
-No external data, APIs or pretrained weights are used; the model is LightGBM (MIT).
+The frozen v24/v20 pipelines use GPU XGBoost stage-one models trained on
+separate S1 groups and a second stage using candidate/competitor context.
+Multilingual-e5-small/base-derived cross-encoders provide pair logits on the
+uncertain score band. Pretrained weights are fine-tuned on supplied pairs;
+the selected checkpoints and their licensing/provenance must accompany the
+Round-2 reproduction package.
 
-**Code:** `code/business_entity_resolution/` (README has exact commands); full details in `METHODOLOGY_DETAILS.md` (same zip).
+The v25 correction is a 600-tree LightGBM model (15 leaves, maximum depth 5),
+trained on tuning identities with 63 numeric features: base/neural scores,
+text agreement, missing fields, address digits, and full-pool name frequency.
+Its fixed India/US cutoff is 0.74. IDs and row order are not predictive features.
+France uses the frozen French-normalized neural blend at 0.925 and documented
+rules; French labels are absent, so local accuracy is not claimed.
+
+v26 includes same-address suffix/rebrand and unique-core French rules. v27 adds
+7,096 different-address French name-pattern matches and 2,099 French rescue
+matches, preserving v26's India/US rows. These are unlabelled French
+extensions, justified by India/US analogues (87-99.9% true), not French labels.
+
+v30 corrects the French cross-encoder input normalization. The earlier table
+mapped French generic suffixes onto English words that mark different businesses
+in the training data ("& Fils" to "& Sons", "Groupe" to "Group", "Ets" to
+"Enterprises"). Measured on the unlabeled test data, & Fils, Associés, Frères,
+Groupe and Développement occur at the reference's own address 4-20% of the time,
+like the English true-match suffixes Services/Center/Partners (6-18%). Holding,
+Participations and Distribution occur there 0.03% of the time, like the English
+decoy suffixes. The corrected table maps the first group to Services/Partners
+and the second to Group. The same xenc4 cross-encoder rescored the 757,114 French
+band pairs, and the unchanged blend reproduced the previous French scores to
+1e-7 before the substitution. v30 adds 14,111 French links for targets that
+v28fast_rescue left unassigned and removes none. Public score went from 0.98417
+(v26) to 0.984718.
+
+## Evaluation and results
+
+The objective is per-reference macro F0.5: `5TP / (true_count + 4predicted_count)`,
+with empty/empty equal to one. All references enter its denominator. Base
+training S1 identities are excluded from tune/final; correction selection uses
+S1-grouped tuning folds. The final set has been reused during development and
+is not a fresh untouched test. Held-pool ownership is smaller than full-test
+ownership, which limits comparability. No known positives are injected into
+evaluation retrieval.
+
+| Measured result | Score |
+|---|---:|
+| v24stack public, user-confirmed | 0.982910 |
+| v26 public, user-confirmed | 0.98417 |
+| **v30 public, user-confirmed (final selected)** | **0.984718** |
+| v26 joint final India/US audit, 50,689 references | 0.989350 |
+| v26 final India / US | 0.989011 / 0.989577 |
+| v28fast_rescue / v30 joint final India/US | **0.989583** |
+| Fixed rescue gain over the same v25 baseline | +0.000420 |
+
+The fixed rescue accepts 234 additional final pairs, 218 true. v27 had the same
+India/US decisions as v26 and was not uploaded. A later neural robustness
+experiment (xenc7) and its US-only variant failed adoption checks and are not
+selected. Rules tested and rejected on labelled data: same-name + house-number
+rescue without a text score, sibling name propagation, rarity-gated and
+name-only thresholds, a winner-margin rule and a link-count prior. All gained
+at most +0.0001, and some lost up to -0.027.
+Candidate oracle scores are upper bounds on their labeled populations, not
+trained scores or test forecasts. No 0.995 result is claimed.
+
+## Reproduction and submission status
+
+Both outputs preserve all 1,732,544 references and empty lists. The final v30
+file has 5,807,702 links, 0 targets with two owners and 0 cross-country links
+(SHA-256 prefix 62228fce34a43fec). The supplied validator passes on the matching
+file. The unmodified independent checker and a streaming candidate check confirm
+original IDs, format, ownership and containment in
+`work/comp/v25/candidate_pairs_v27.tsv` (181,275,851 pairs). The supplied
+validator runs out of RAM on the 2.3 GB candidate file on this machine, so the
+candidate file was verified by those two independent checks instead. Original
+inputs and the validator are unchanged.
+
+The organizer's 27 September clarification requires the matching TSV tonight;
+the final ZIP is for Round 2. The current code ZIP is a review bundle, not yet
+a complete standalone archive. For the selected v30 (submissions/v30_code.zip is the review bundle),
+package its frozen source, all required weights/tokenizers, configuration,
+licenses, environment and both TSVs. Preserve hashes and verify reproduction.
+
+See [evening findings](docs/EVENING_098417_FINAL_REVIEW_2026-09-27.md) and
+[runbook](docs/RUNBOOK.md) for evidence, exact paths and outstanding limitations.

@@ -1,5 +1,32 @@
 # Runbook: local baseline and later Kaggle execution
 
+**Follow-up experiments:** five additional variants tested; none passed adoption. v28 remains unchanged, with one upload unused. [Results and error budget](V28_FOLLOWUP_EXPERIMENTS_2026-09-27.md).
+
+**Latest fast-model release:** v28fast_rescue is prepared and independently validated, not submitted. Local India/US final score **0.989583** versus **0.989350**; CPU pilot 22.6 seconds. France remains identical to v27 and unlabelled. Public best stays **v26: 0.98417**. **One upload remains.** Read the [fast rescue report](FAST_RESCUE_TRAINING_2026-09-27.md) for files, checks, reproduction and limitations. Older status paragraphs below are historical.
+
+**Latest: 27 September evening.** User-confirmed best: **v26, 0.98417**.
+**One upload remains.** v27 passed a fresh full independent output/candidate
+check; its French accuracy is unlabelled. The completed xenc7 experiment failed
+adoption. See the [evening review](EVENING_098417_FINAL_REVIEW_2026-09-27.md) for exact results and new
+organizer rules: 17 total attempts; TSV tonight, ZIP in Round 2. Earlier status
+sections below are historical and superseded by this update.
+
+**Current frozen-run instructions:** the confirmed best is
+`submissions/v24stack_t077_fr0925_matching_results.tsv` at **0.982910**.
+Two team leaderboard slots remain as of the afternoon update. Consult the
+[post-result review](POST_0982910_BLUEPRINT_REVIEW_2026-09-27.md) for the running
+private xenc7 experiment and its adoption checks, then
+[v24 correction and its release record](V24_CORRECTION_AND_0995_AUDIT_2026-09-27.md),
+[the public 0.982277 improvement audit](PUBLIC_0982277_IMPROVEMENT_AUDIT_2026-09-26.md),
+[the 0.995 follow-up](PUSH_0995_STATUS_2026-09-26.md) and
+[the measured v20x release commands](PUSH_0993_MEASURED_2026-09-26.md).
+The isolated correction commands/design are in
+`artifacts/push995-20260927-0915/README.md`; its model is trained on tuning
+identities only and has a frozen cutoff. Baseline commands below do not reproduce
+v20x/v22/v24 or that correction model. Never point an old
+baseline command at their saved model/output directories. Current models require
+their matching frozen source, environment, candidates and manifests.
+
 These commands match the implemented interface. They are instructions, not a record that full-data runs have already finished. The source/Markdown checks and synthetic integration test are described in [QUALITY_REPORT.md](QUALITY_REPORT.md).
 
 ## 1. Open the correct project and verify

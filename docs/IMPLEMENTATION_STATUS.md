@@ -1,5 +1,33 @@
 # Implementation status
 
+**Follow-up experiments:** five additional variants tested; none passed adoption. v28 remains unchanged, with one upload unused. [Results and error budget](V28_FOLLOWUP_EXPERIMENTS_2026-09-27.md).
+
+**Latest fast-model release:** v28fast_rescue is prepared and independently validated, not submitted. Local India/US final score **0.989583** versus **0.989350**; CPU pilot 22.6 seconds. France remains identical to v27 and unlabelled. Public best stays **v26: 0.98417**. **One upload remains.** Read the [fast rescue report](FAST_RESCUE_TRAINING_2026-09-27.md) for files, checks, reproduction and limitations. Older status paragraphs below are historical.
+
+**Latest: 27 September evening.** User-confirmed best: **v26, 0.98417**.
+**One upload remains.** v27 passed a fresh full independent output/candidate
+check; its French accuracy is unlabelled. The completed xenc7 experiment failed
+adoption. See the [evening review](EVENING_098417_FINAL_REVIEW_2026-09-27.md) for exact results and new
+organizer rules: 17 total attempts; TSV tonight, ZIP in Round 2. Earlier status
+sections below are historical and superseded by this update.
+
+## Current production status — 27 September, afternoon
+
+See [v24 correction and the 0.995 target](V24_CORRECTION_AND_0995_AUDIT_2026-09-27.md).
+The user confirms **0.982910** for `v24stack_t077_fr0925`, an improvement of
+0.000633 over mixed-cutoff v20x. Exactly two team submissions remain.
+Read the [new blueprint review](POST_0982910_BLUEPRINT_REVIEW_2026-09-27.md)
+for rejected pilots and the running private Kaggle xenc7 experiment. The earlier
+0.925 file's exact score remains unknown. v22 and v24 training are complete.
+The separate v24 correction model scores **0.988804** on the final split,
+versus 0.988313 for its frozen reference; both labeled countries improve.
+The v24 final candidate oracle is 0.995824, **not a trained-model score**.
+See the linked audit's release record for test-file completion and checks.
+There is no verified 0.995 submission; French accuracy remains unmeasured.
+
+The sections below are the **25 September baseline snapshot** and its command
+contracts, not a claim that current full-data training has never happened.
+
 Updated 25 September 2026. The design and baseline contracts were written before their implementations. Use the [runbook](RUNBOOK.md) for supported commands and the [quality report](QUALITY_REPORT.md) for verification evidence.
 
 ## Implemented
