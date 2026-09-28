@@ -1,7 +1,7 @@
 import duckdb
 con=duckdb.connect(); con.execute("SET threads=6; SET memory_limit='6GB'")
 LF="['inc','llc','corp','ltd','co','pvt','lp','llp','pc','pllc','sarl','sas','sa','eurl','sasu','sci','ei','snc','private','limited']"
-SP='C:/Users/ashin/AppData/Local/Temp/claude/D--Amazon-ML-26/a6f59d5d-823b-4509-a3c7-7eb2c7f6f181/scratchpad'
+SP='work/comp'
 def kind(P, pairs, KEY='rid'):
     con.execute(f"CREATE OR REPLACE TABLE r AS SELECT rid, entity_id, country, name, addr FROM read_parquet(['{P}/norm_s1.parquet','{P}/norm_s2.parquet','{P}/norm_s3.parquet'])")
     con.execute(f"""CREATE OR REPLACE TABLE k AS SELECT pp.*, s.country, s.addr<>t.addr AND t.addr<>'' diffaddr,

@@ -7,7 +7,7 @@ con.execute(f"CREATE TABLE r AS SELECT rid, src, country, name, core, addr FROM 
 con.execute("CREATE TABLE uc AS SELECT country, core, any_value(rid) sid FROM r WHERE src=1 GROUP BY ALL HAVING count(*)=1")
 con.execute("CREATE TABLE pairs AS SELECT uc.sid, t.rid tid FROM r t JOIN uc ON uc.country=t.country AND uc.core=t.core WHERE t.src>1 AND t.addr=''")
 con.execute(f"CREATE TABLE fr AS SELECT sid, tp, fp, fn FROM read_parquet('{S}/final_v1/error_by_reference.parquet')")
-con.execute("CREATE TABLE lt AS SELECT sid, tid FROM read_parquet('C:/Users/ashin/AppData/Local/Temp/claude/D--Amazon-ML-26/a6f59d5d-823b-4509-a3c7-7eb2c7f6f181/scratchpad/lt.parquet')")
+con.execute("CREATE TABLE lt AS SELECT sid, tid FROM read_parquet('work/comp/final_truth_links.parquet')")
 con.execute(f"CREATE TABLE cand AS SELECT sid, tid FROM read_parquet('{M}/hold_preds.parquet')")
 con.execute(f"CREATE TABLE owned AS SELECT DISTINCT tid FROM read_parquet('{S}/final_v1/locked_predictions.parquet') WHERE lgb_small_tree>=0.77")
 con.execute("""CREATE TABLE x AS SELECT p.*, (lt.sid IS NOT NULL) y, (c.sid IS NOT NULL) incand, p.tid IN (SELECT tid FROM owned) own FROM pairs p

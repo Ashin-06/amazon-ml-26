@@ -31,4 +31,3 @@ work/
 *.pdf
 .benchmarks/
 submissions/*.tsv
-.claude/
