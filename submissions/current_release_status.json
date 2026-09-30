@@ -1,5 +1,5 @@
 {
-  "as_of_ist": "2026-09-27T21:17:39+05:30",
+  "as_of_ist": "2026-09-28 package audit",
   "team": "Cardinality",
   "members": [
     "Ashin Murugan",
@@ -52,13 +52,52 @@
   },
   "round1_requirement": "matching TSV only; final ZIP is Round 2 per current organizer answers",
   "xenc7": "Completed; original and US-only adoption rejected; not a new submission",
-  "current_report": "docs/FAST_RESCUE_TRAINING_2026-09-27.md",
-  "round2_package": "Incomplete standalone reproduction; existing ZIP is code/review only",
+  "current_report": "docs/FINAL_ZIP_AND_FIGURES_2026-09-28.md",
+  "round2_package": "ZIP built and every entry hash/CRC checked; selected outputs unchanged; diagrams verified; full clean-room reproduction remains unverified.",
   "latest_followup": {
     "report": "docs\\V28_FOLLOWUP_EXPERIMENTS_2026-09-27.md",
     "alternatives_tested": 5,
     "adopted": 0,
     "final_labels_opened": false,
     "published_files_unchanged": true
+  },
+  "round2_methodology": {
+    "path": "submissions/Cardinality_submission/Documentation_template.md",
+    "prepared": true,
+    "uploaded": false,
+    "deadline_as_supplied": "29 September 10:00 AM",
+    "audit": "docs/ROUND2_PACKAGE_AUDIT_2026-09-28.md"
+  },
+  "round2_zip": {
+    "zip": "D:\\Amazon ML 26\\submissions\\Cardinality_submission.zip",
+    "bytes": 2312761041,
+    "decimal_GB": 2.312761041,
+    "GiB": 2.1539265671744943,
+    "sha256": "b416ee02bd9f5a98afe68c46f00b65d580973c40f6645601d7ac2adcde6ec5cc",
+    "files": 118,
+    "seconds": 404.75,
+    "size_breakdown": {
+      "code_docs_figures": {
+        "uncompressed_bytes": 838608,
+        "compressed_bytes": 492970
+      },
+      "models": {
+        "uncompressed_bytes": 1789314286,
+        "compressed_bytes": 1282853441
+      },
+      "candidates": {
+        "uncompressed_bytes": 2358804802,
+        "compressed_bytes": 987593622
+      },
+      "matches": {
+        "uncompressed_bytes": 97287218,
+        "compressed_bytes": 41796844
+      }
+    },
+    "entry_hashes_and_crc": "PASS",
+    "expected_root_structure": "PASS",
+    "image_links": "PASS",
+    "submitted": false,
+    "clean_room_reproduction_verified": false
   }
 }

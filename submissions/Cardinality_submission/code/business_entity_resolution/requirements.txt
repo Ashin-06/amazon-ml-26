@@ -1,0 +1,22 @@
+# Python 3.12.13 (the version that trained the saved tree models; stage-3 prediction checks the environment).
+# Exact versions used for the final submission.
+anyascii==0.3.3
+duckdb==1.5.5
+joblib==1.3.2
+lightgbm==4.6.0
+numpy==2.4.5
+pandas==2.3.3
+psutil==7.2.2
+pyarrow==20.0.0
+rapidfuzz==3.14.5
+scikit-learn==1.7.2
+scipy==1.17.1
+threadpoolctl==3.6.0
+xgboost==3.0.0
+# Cross-encoder training/inference (CUDA GPU). Install torch from the CUDA 11.8 index:
+#   pip install torch==2.7.1 --index-url https://download.pytorch.org/whl/cu118
+torch==2.7.1
+transformers==4.36.2
+tokenizers==0.15.2
+safetensors==0.5.3
+sentencepiece==0.2.1

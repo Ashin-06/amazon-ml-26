@@ -1,5 +1,9 @@
 # Business entity resolution — Amazon ML Challenge 2026
 
+**Final ZIP built:** `submissions/Cardinality_submission.zip`, 2.313 GB. Archive entry hashes/CRC and structure passed; diagrams rendered and checked. Contains the selected v30 files, models and methodology. Full clean-room reproduction remains unverified. [Archive report](../../docs/FINAL_ZIP_AND_FIGURES_2026-09-28.md).
+
+**28 September package audit:** selected v30 public score **0.984718**, zero leaderboard attempts remaining. All staged models and outputs match their hashes; fresh full output/candidate check passed. Fixed saved-source line endings and rescue path/integrity defects; corrected methodology. Clean end-to-end reproduction remains unverified after a failed replay. Methodology deadline in the supplied notice: **29 September, 10:00 AM**. See [audit and remaining issues](../../docs/ROUND2_PACKAGE_AUDIT_2026-09-28.md). All older status banners below are historical.
+
 **Follow-up experiments:** five additional variants tested; none passed adoption. v28 remains unchanged, with one upload unused. [Results and error budget](../../docs/V28_FOLLOWUP_EXPERIMENTS_2026-09-27.md).
 
 **Latest fast-model release:** v28fast_rescue is prepared and independently validated, not submitted. Local India/US final score **0.989583** versus **0.989350**; CPU pilot 22.6 seconds. France remains identical to v27 and unlabelled. Public best stays **v26: 0.98417**. **One upload remains.** Read the [fast rescue report](../../docs/FAST_RESCUE_TRAINING_2026-09-27.md) for files, checks, reproduction and limitations. Older status paragraphs below are historical.

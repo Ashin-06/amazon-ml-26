@@ -1,0 +1,24 @@
+{
+  "versions": [
+    "v12",
+    "v15k",
+    "v20x",
+    "v24stack",
+    "v26",
+    "v30"
+  ],
+  "public_scores": [
+    0.953796,
+    0.971691,
+    0.982277,
+    0.98291,
+    0.98417,
+    0.984718
+  ],
+  "pipeline_counts": {
+    "references": 1732544,
+    "matches": 5807702,
+    "candidates": 181275851
+  },
+  "chart_excludes_local_validation": true
+}

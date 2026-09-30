@@ -31,3 +31,10 @@ work/
 *.pdf
 .benchmarks/
 submissions/*.tsv
+
+# Submission package: code and docs are tracked; outputs, weights and duplicate staging stay local
+submissions/Cardinality_submission/output/
+submissions/Cardinality_submission/code/business_entity_resolution/models/
+submissions/final_package_v30/
+submissions/Cardinality_v20x_code/
+submissions/*.bak

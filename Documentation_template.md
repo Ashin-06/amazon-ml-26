@@ -2,7 +2,7 @@
 
 **Team Name:** Cardinality  
 **Team Members:** Ashin Murugan, Cherin Yacoob, Neha R, Harisankar G  
-**Submission Date:** 27 September 2026 (final leaderboard submission); methodology submitted 28 September 2026  
+**Submission Date:** 27 September 2026 (final leaderboard submission); methodology prepared 28 September 2026  
 **Final submission:** `matching_results.tsv` (version v30), public macro F0.5 **0.984718**
 
 ---
@@ -24,6 +24,10 @@ The held-out India/US macro F0.5 is 0.9896.
 
 ---
 
+### Pipeline diagram
+
+![Logical v30 data flow; candidate export is separate from final matching decisions.](submissions/Cardinality_submission/code/business_entity_resolution/docs/figures/pipeline_v30.png)
+
 ## 2. Methodology
 
 ### 2.1 Problem Analysis
@@ -32,12 +36,39 @@ Exploratory analysis of the training labels and of the unlabeled test data shape
 
 **Structure of the matches**
 - Every Source-2/3 record belongs to **at most one** reference, so one-owner-per-target is a hard constraint.
-- References average **3.46** true matches in both India and US, with an identical distribution; 5.6% have none.
+- References average **3.46** true matches in both India and US, with similar distributions; 5.6% have none.
 - 26% of training targets belong to no reference. These are distractors, and they almost never share a
   reference's exact address.
 
+**How Sources 2 and 3 connect to Source 1 (training labels)**
+
+Each Source-1 row lists its linked Source-2 and Source-3 IDs in `matched_entity_ids`; an empty list means no
+known link. We counted all 2,206,821 training references and their labels, including empty lists:
+
+| Country and target source | Target records | Linked to a reference | References with at least one link from that source |
+| --- | ---: | ---: | ---: |
+| India, Source 2 | 2,017,799 | 73.4% | 87.0% |
+| India, Source 3 | 2,115,547 | 74.7% | 87.9% |
+| US, Source 2 | 3,016,817 | 73.4% | 86.9% |
+| US, Source 3 | 3,170,056 | 74.6% | 87.9% |
+
+The mean links per reference are 1.67 from Source 2 and 1.79 from Source 3. In the labeled data, the
+commonest per-reference link pattern is one link from each source, followed by (one, two), (two, one), and
+(two, two). Source-2 and Source-3 records enter one target pool; source identity remains a model feature,
+and the final decision assigns each target to at most one Source-1 reference. These are training-label
+statistics, not a claim about the unlabeled French test records.
+
 **Name noise**
-- Transliteration into Devanagari, Kannada, Bengali and Gujarati.
+- Native-script Indian names and addresses: the target data contains Devanagari, Kannada, Bengali, Gujarati,
+  Gurmukhi, Odia, Tamil, Telugu and Malayalam. For example, `राम` is transliterated *from* Devanagari
+  to `ram`, and `ಕನ್ನಡ` is transliterated *from* Kannada to `knnd` by the pinned `anyascii` library.
+  This is normalization toward the Latin-script reference text, not translation of business meaning.
+  The full name and address are transliterated before token normalization; native-script state names are
+  then mapped to state codes where a known mapping exists. A lexicon learned only from non-held-out
+  training links corrects recurring transliteration spellings; a consonant skeleton helps with unseen variants.
+- French names and addresses can contain accents. `anyascii` folds characters such as `é`, `è`, `à`,
+  `ç` and `ï` to Latin letters before comparison. French legal forms are handled in the core-name view,
+  and known region/département equivalents are mapped only for whole address components.
 - OCR digit swaps ("5ervices", "hea1th").
 - Glued web domains ("pediatricdentistryassociates.com").
 - Honorific prefixes, ID tags, "DBA/AKA" aliases and word shuffles.
@@ -66,15 +97,13 @@ they are the hardest case when several references share the name.
 ### 2.2 Solution Strategy
 
 **Approach Type:** Blocking + multi-stage classifier + neural re-scoring + global assignment (hybrid).  
-**Core Innovation:** Every corruption and decoy pattern was measured, and the measurements drove targeted fixes:
+**Core approach:** Measured corruption and distractor patterns motivated targeted fixes:
 - **Blocking routes** aimed at the matches that key blocking loses.
 - **Transfer to France without labels.** A corruption pattern is identified by how often a token that a target
-  adds appears at the reference's own address. True-match suffixes co-locate 4–20% of the time; decoy suffixes
-  about 0.03%. This measurement set the French normalization and rules.
+  adds appears at the reference's own address. The observed co-location rates motivated hypotheses about French suffixes and informed normalization and rules. These measurements do not establish French match precision, because French labels are unavailable.
 
 Validation holds out ~4.5% of Source-1 identities (hash of the identity ID), with their matches, and splits them
-into a *tune* half and a *final* half. Models never train on held-out identities. Thresholds and model choices are
-selected on *tune*; scores are reported on *final*. The metric is the exact per-reference macro F0.5. Every
+into a *tune* half and a *final* half. The base tree and neural models exclude these held-out identities. The blend, correction model and rescue matcher use the *tune* identities, with grouped cross-validation for the learned correction/rescue models. Reported final scores use the separate *final* identities. This final split was inspected across multiple experiments, so it is a reused validation estimate rather than an untouched independent test. The metric is the exact per-reference macro F0.5. Every
 reference counts, including those with no matches and those whose matches were never retrieved.
 
 ---
@@ -113,11 +142,11 @@ reference counts, including those with no matches and those whose matches were n
 **Candidate pairs generated:** **181,275,851** for 1,732,544 references, about 105 per reference. The full
 same-country comparison space is 6.72 × 10¹², so the reduction ratio is **99.9973%**.
 
-**How we ensured true matches were not lost**
+**How retrieval losses were measured**
 - Pair recall was measured on the held-out identities (98.5% of true links retrieved before the rescue route),
   together with the *candidate oracle*: the macro F0.5 if every retrieved pair were classified perfectly
-  (**0.9958** on the final half).
-- Each route was added only when it raised the oracle on the tune half at a measured cost in pairs per reference.
+  (**0.9958** on the v24 final-half candidate pool before later rescue additions). This is an oracle bound for that pool, not an achieved score.
+- Retrieval routes were assessed on labeled India/US data for recall and candidate cost. French additions were based on transferred patterns and unlabeled analysis; their accuracy is not established by the India/US oracle.
 - Candidate generation never uses labels. The exported `candidate_pairs.tsv` is exactly the set the matching models
   score, and every accepted match is contained in it.
 
@@ -185,7 +214,7 @@ same-country comparison space is 6.72 × 10¹², so the reduction ratio is **99.
      - identical name at a different address, but only when the legal form is not swapped. A swapped legal form
        ("X SARL" vs "X EURL") is treated as a possible sibling business: in US data it is only 31% true.
    - **Decoy families left out:** in-place word swaps between French organization words ("Club" ↔ "École").
-     These are six times more frequent in France than in the US, which marks them as sibling decoys.
+     These are more frequent in France than in the US; we treated that as evidence for a conservative exclusion, not proof that every such pair is a distractor.
 
 **Threshold selection method**
 - Exact macro F0.5, including one-owner-per-target resolution, maximized on the tune half: coarse grid, then
@@ -199,6 +228,8 @@ same-country comparison space is 6.72 × 10¹², so the reduction ratio is **99.
 
 ## 5. Results & Error Analysis
 
+![Recorded public macro F0.5 by submitted development version; local validation scores excluded.](submissions/Cardinality_submission/code/business_entity_resolution/docs/figures/public_scores.png)
+
 | Version (key change) | Public macro F0.5 |
 |---|---:|
 | Two-stage trees, basic cleaning | 0.954 |
@@ -209,15 +240,14 @@ same-country comparison space is 6.72 × 10¹², so the reduction ratio is **99.
 | **Learned rescue matcher, corrected French neural normalization (final)** | **0.984718** |
 
 - **F0.5 score (macro, held-out India/US final half, 50,689 references):** **0.9896**. The candidate oracle is
-  0.9958. Of the remaining loss, about 60% is true pairs rejected, 32% true pairs never retrieved and 8% false
-  matches.
+  0.9958 for the earlier v24 candidate pool. Separately, on 50,141 **tuning** references with the learned rescue, the score is 0.989834 and the candidate oracle is 0.996767. Its error decomposition attributes about 60% of remaining macro loss to rejected retrieved true pairs, 32% to unretrieved true pairs and 8% to false accepted pairs. These tuning statistics are not final-half statistics.
 - **Common false positives (wrong merges):**
   - businesses with the same name and a different legal form in another city ("X LLC" vs "X Inc");
   - co-located sibling businesses at one address that differ by one word (very common in France:
     "Faune Club SARL" vs "Faune École SARL");
   - common-name records without an address.
 
-  Because F0.5 weighs a false positive four times as heavily as a false negative, the decision rules deliberately
+  For a nonempty reference, F0.5 = 5TP / (5TP + 4FP + FN), and an empty prediction with empty truth scores 1. The decision rules deliberately
   favour precision. Accuracy on references with no true match is about 99.8%.
 - **Common false negatives (missed matches):**
   - Address-less records whose name is shared by two or more references. In training, the records' spelling,
@@ -234,8 +264,7 @@ same-country comparison space is 6.72 × 10¹², so the reduction ratio is **99.
 A measured, pattern-driven pipeline reached a held-out macro F0.5 of 0.9896 on India/US and 0.9847 on the public
 leaderboard: key blocking with targeted recovery routes, boosted trees with competition context, a fine-tuned
 multilingual cross-encoder, calibrated correction models and one-owner-per-target assignment. The most useful
-lesson was that unlabeled data can still be measured. How corruptions co-occur with addresses revealed which
-French words behave like English true-match suffixes, and correcting that raised the score without French labels.
+lesson was that unlabeled data can still be measured. Co-occurrence with addresses motivated French normalization hypotheses. The final submission improved the aggregate public score, but without French labels we cannot independently establish French precision or assign the full gain to one normalization change.
 The largest remaining gains are domain adaptation for France (pseudo-labelling from high-precision patterns) and
 dense embedding blocking for the denser test pool.
 
@@ -252,27 +281,22 @@ dense embedding blocking for the denser test pool.
   - `model.py`: features, two-stage boosted trees, context features, threshold selection.
   - `run_stage1.py`: normalization, lexicon and blocking for a split.
   - `run_stage3.py`: features, training, prediction and export.
-- `code/business_entity_resolution/final_v30/`: final-stage scripts.
-  - `india_us/v25.py`: correction model.
-  - `india_us/rescue.py`, `india_us/rescue_apply.py`: rescue route.
-  - `fast_rescue/`: learned rescue matcher.
-  - `france/xe_french_forms_v2.py`, `france/fr_v2_scores.py`: French neural normalization and re-scoring.
-  - `france/fr_overlay.py`, `france/union_additions.py`: French structural rules.
-  - `checks/`: validation scripts.
-- **Reproducing the outputs:**
-  1. `run_stage1.py train` and `run_stage1.py test` (normalize, learn the lexicon, block).
-  2. `run_stage3.py` (train, predict and export `candidate_pairs.tsv`).
-  3. Cross-encoder scoring of the uncertain band.
-  4. The `final_v30` steps in the order listed in `final_v30/README.md`. They produce `output/matching_results.tsv`
-     and `output/candidate_pairs.tsv`.
+- `code/business_entity_resolution/src/correction/`: correction model and feature computation.
+- `code/business_entity_resolution/src/rescue/`: rescue retrieval and learned matcher.
+- `code/business_entity_resolution/src/crossencoder/`: neural inference and French input normalization.
+- `code/business_entity_resolution/src/france/`: structural rules and additions-only merge.
+- `code/business_entity_resolution/src/checks/`: output checks.
+- `code/business_entity_resolution/models/`: saved tree/correction/rescue weights, tokenizers, lexicons,
+  neural test-score caches and hash manifests. The two fine-tuned e5 weight files were omitted to meet the
+  portal's 1,024 MB ZIP cap; the README documents the test-specific saved-score replay and its limits.
+- **Reproduction:** `code/business_entity_resolution/README.md` describes saved-model execution and retraining prerequisites; `reproduce.sh` is the saved-model command chain. The current package has not passed a complete clean-room reproduction. An earlier partial replay encountered memory failures. Follow-up analysis found 13,786 neural-score differences but no changed 0.925 threshold decisions or selected owners at that French decision step. This limited check does not establish complete clean-room reproduction. The packaged output files are byte-identical to the selected competition artifacts, which is distinct from proving end-to-end reproduction.
 
 ### B. Additional Results
 
 - Held-out final half, per country, with the fixed-threshold rescue: India 0.9890, US 0.9896. The learned rescue
   matcher raised the joint India/US score from 0.98935 to 0.98958.
 - Output integrity for the final files: 1,732,544 references, all present; 5,807,702 matches, each target assigned
-  to at most one reference; no cross-country links; every match inside the candidate set; the organizers'
-  validator passes.
+  to at most one reference; no cross-country links; every match inside the candidate set; the competition log records successful output checks. The current package audit confirms exact output hashes; it does not claim a new successful official full-candidate validator run.
 
 **Compliance:**
 - Only the supplied data is used. There are no external business registries, geocoding or hosted inference APIs.
