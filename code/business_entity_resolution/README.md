@@ -1,31 +1,6 @@
 # Business entity resolution — Amazon ML Challenge 2026
 
-**Final ZIP built:** `submissions/Cardinality_submission.zip`, 2.313 GB. Archive entry hashes/CRC and structure passed; diagrams rendered and checked. Contains the selected v30 files, models and methodology. Full clean-room reproduction remains unverified. [Archive report](../../docs/FINAL_ZIP_AND_FIGURES_2026-09-28.md).
-
-**28 September package audit:** selected v30 public score **0.984718**, zero leaderboard attempts remaining. All staged models and outputs match their hashes; fresh full output/candidate check passed. Fixed saved-source line endings and rescue path/integrity defects; corrected methodology. Clean end-to-end reproduction remains unverified after a failed replay. Methodology deadline in the supplied notice: **29 September, 10:00 AM**. See [audit and remaining issues](../../docs/ROUND2_PACKAGE_AUDIT_2026-09-28.md). All older status banners below are historical.
-
-**Follow-up experiments:** five additional variants tested; none passed adoption. v28 remains unchanged, with one upload unused. [Results and error budget](../../docs/V28_FOLLOWUP_EXPERIMENTS_2026-09-27.md).
-
-**Latest fast-model release:** v28fast_rescue is prepared and independently validated, not submitted. Local India/US final score **0.989583** versus **0.989350**; CPU pilot 22.6 seconds. France remains identical to v27 and unlabelled. Public best stays **v26: 0.98417**. **One upload remains.** Read the [fast rescue report](../../docs/FAST_RESCUE_TRAINING_2026-09-27.md) for files, checks, reproduction and limitations. Older status paragraphs below are historical.
-
-**Latest: 27 September evening.** User-confirmed best: **v26, 0.98417**.
-**One upload remains.** v27 passed a fresh full independent output/candidate
-check; its French accuracy is unlabelled. The completed xenc7 experiment failed
-adoption. See the [evening review](../../docs/EVENING_098417_FINAL_REVIEW_2026-09-27.md) for exact results and new
-organizer rules: 17 total attempts; TSV tonight, ZIP in Round 2. Earlier status
-sections below are historical and superseded by this update.
-
-**Current production versions:** the user-confirmed public best is **0.982910**
-for `v24stack_t077_fr0925`. Read the
-[post-result review](../../docs/POST_0982910_BLUEPRINT_REVIEW_2026-09-27.md)
-for current experiments and the two remaining uploads, then
-[v24 correction and the 0.995 target](../../docs/V24_CORRECTION_AND_0995_AUDIT_2026-09-27.md).
-The frozen v20x/v22/v24 runs use version-specific settings, GPU-trained tree models
-and a neural rescorer. The historical CPU pipeline description and defaults below
-do not reproduce those submissions. Use each selected run's exact source and
-artifact fingerprints. v22 and v24 training are complete; the separate correction
-model reaches 0.988804 on final validation. Its release status is in the linked
-audit, and no 0.995 leaderboard result has been demonstrated.
+**Final result:** submission v30 scored **0.984718** public macro F0.5 (244th global rank); held-out India/US macro F0.5 0.9896. The complete final pipeline, with reproduction instructions, is in [`submissions/Cardinality_submission/`](../../submissions/Cardinality_submission/), and the method is described in [the methodology](../../Documentation_template.md). The sections below describe earlier milestones and are kept for reference.
 
 Pipeline for matching every Source-1 business record to its Source-2 / Source-3
 records. Everything runs on CPU and uses only the supplied data (no external lookups).

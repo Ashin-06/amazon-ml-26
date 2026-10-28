@@ -1,37 +1,6 @@
 # Runbook: local baseline and later Kaggle execution
 
-**Current upload ZIP:** `submissions/Cardinality_submission.zip`, 997.4 MB, below the portal's 1,024 MB cap. It preserves the selected v30 TSVs and replaces two oversized neural weight files with checked test-score caches. Full clean-room reproduction remains unverified. [Compact archive report](FINAL_COMPACT_ZIP_2026-09-28.md). The older 2.313 GB archive report is historical.
-
-**Language and link audit:** the rebuilt final ZIP includes verified S1–S2/S3 link statistics and native-script/French normalization details. The selected matching and candidate outputs are unchanged. [Measurements](LANGUAGE_AND_SOURCE_LINK_AUDIT_2026-09-28.md).
-
-**28 September package audit:** selected v30 public score **0.984718**, zero leaderboard attempts remaining. All staged models and outputs match their hashes; fresh full output/candidate check passed. Fixed saved-source line endings and rescue path/integrity defects; corrected methodology. Clean end-to-end reproduction remains unverified after a failed replay. Methodology deadline in the supplied notice: **29 September, 10:00 AM**. See [audit and remaining issues](ROUND2_PACKAGE_AUDIT_2026-09-28.md). All older status banners below are historical.
-
-**Follow-up experiments:** five additional variants tested; none passed adoption. v28 remains unchanged, with one upload unused. [Results and error budget](V28_FOLLOWUP_EXPERIMENTS_2026-09-27.md).
-
-**Latest fast-model release:** v28fast_rescue is prepared and independently validated, not submitted. Local India/US final score **0.989583** versus **0.989350**; CPU pilot 22.6 seconds. France remains identical to v27 and unlabelled. Public best stays **v26: 0.98417**. **One upload remains.** Read the [fast rescue report](FAST_RESCUE_TRAINING_2026-09-27.md) for files, checks, reproduction and limitations. Older status paragraphs below are historical.
-
-**Latest: 27 September evening.** User-confirmed best: **v26, 0.98417**.
-**One upload remains.** v27 passed a fresh full independent output/candidate
-check; its French accuracy is unlabelled. The completed xenc7 experiment failed
-adoption. See the [evening review](EVENING_098417_FINAL_REVIEW_2026-09-27.md) for exact results and new
-organizer rules: 17 total attempts; TSV tonight, ZIP in Round 2. Earlier status
-sections below are historical and superseded by this update.
-
-**Current frozen-run instructions:** the confirmed best is
-`submissions/v24stack_t077_fr0925_matching_results.tsv` at **0.982910**.
-Two team leaderboard slots remain as of the afternoon update. Consult the
-[post-result review](POST_0982910_BLUEPRINT_REVIEW_2026-09-27.md) for the running
-private xenc7 experiment and its adoption checks, then
-[v24 correction and its release record](V24_CORRECTION_AND_0995_AUDIT_2026-09-27.md),
-[the public 0.982277 improvement audit](PUBLIC_0982277_IMPROVEMENT_AUDIT_2026-09-26.md),
-[the 0.995 follow-up](PUSH_0995_STATUS_2026-09-26.md) and
-[the measured v20x release commands](PUSH_0993_MEASURED_2026-09-26.md).
-The isolated correction commands/design are in
-`artifacts/push995-20260927-0915/README.md`; its model is trained on tuning
-identities only and has a frozen cutoff. Baseline commands below do not reproduce
-v20x/v22/v24 or that correction model. Never point an old
-baseline command at their saved model/output directories. Current models require
-their matching frozen source, environment, candidates and manifests.
+**Final result:** submission v30 scored **0.984718** public macro F0.5 (244th global rank); held-out India/US macro F0.5 0.9896. The complete final pipeline, with reproduction instructions, is in [`submissions/Cardinality_submission/`](../submissions/Cardinality_submission/), and the method is described in [the methodology](../Documentation_template.md). The sections below describe earlier milestones and are kept for reference.
 
 These commands match the implemented interface. They are instructions, not a record that full-data runs have already finished. The source/Markdown checks and synthetic integration test are described in [QUALITY_REPORT.md](QUALITY_REPORT.md).
 

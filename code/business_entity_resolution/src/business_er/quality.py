@@ -7,7 +7,7 @@ import re
 
 from .storage import file_digest
 
-REQUIRED_DOCS = ("START_HERE.md", "AGENTS.md", "Documentation_template.md", "docs/IMPLEMENTATION_GUIDE.md",
+REQUIRED_DOCS = ("START_HERE.md", "Documentation_template.md", "docs/IMPLEMENTATION_GUIDE.md",
                  "docs/DATA_RESEARCH_REPORT.md", "docs/FUNCTION_REFERENCE.md", "docs/IMPLEMENTATION_STATUS.md",
                  "docs/BASELINE_IMPLEMENTATION.md", "docs/RUNBOOK.md", "docs/approach.md")
 
@@ -49,7 +49,7 @@ def check_workspace(workspace):
     for name in required:
         if not (workspace / name).is_file():
             errors.append("Missing required file: " + name)
-    markdown = [workspace / "START_HERE.md", workspace / "AGENTS.md", workspace / "Documentation_template.md",
+    markdown = [workspace / "START_HERE.md", workspace / "Documentation_template.md",
                 package / "README.md", package / "THIRD_PARTY_NOTICES.md"]
     markdown += sorted((workspace / "docs").glob("*.md"))
     for path in markdown:

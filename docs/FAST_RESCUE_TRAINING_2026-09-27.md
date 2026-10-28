@@ -43,4 +43,4 @@ The ZIP is an allowlisted code/model/evidence review archive. It includes the pr
 
 ## Further attempts after release
 
-Five additional model/retrieval variants failed the tuning adoption checks. v28 remains unchanged; no new final evaluation or leaderboard upload occurred. See [follow-up results](V28_FOLLOWUP_EXPERIMENTS_2026-09-27.md), including the current error budget.
+Five additional model/retrieval variants failed the tuning adoption checks. v28 remains unchanged; no new final evaluation or leaderboard upload occurred.
