@@ -1,6 +1,6 @@
 # Amazon ML Challenge 2026: start here
 
-**Final result:** submission v30 scored **0.984718** public macro F0.5 (244th global rank); held-out India/US macro F0.5 0.9896. The complete final pipeline, with reproduction instructions, is in [`submissions/Cardinality_submission/`](submissions/Cardinality_submission/), and the method is described in [the methodology](Documentation_template.md). The sections below describe earlier milestones and are kept for reference.
+**Final result:** submission v30 scored **0.984718** public macro F0.5 (244th global rank); held-out India/US macro F0.5 0.9896. The complete final pipeline, with reproduction instructions, is in [`submissions/Cardinality_submission/`](submissions/Cardinality_submission/), and the method is described in [the methodology](Documentation_template.md). Trained models: [v30-models release](https://github.com/Ashin-06/amazon-ml-26/releases/tag/v30-models). The sections below describe earlier milestones and are kept for reference.
 
 The task is **business entity resolution** using noisy business names and addresses. It is not the earlier product-price or image-extraction challenge.
 

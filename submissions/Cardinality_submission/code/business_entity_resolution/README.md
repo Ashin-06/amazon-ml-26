@@ -1,5 +1,7 @@
 # Business Entity Resolution: Team Cardinality
 
+**Trained models:** download them from the [v30-models release](https://github.com/Ashin-06/amazon-ml-26/releases/tag/v30-models): tree models, both cross-encoders, the lexicon and checksums. Unzip into `models/` as described below.
+
 This is the pipeline that produced our final leaderboard submission (public macro F0.5 **0.984718**):
 `output/matching_results.tsv` and its blocking candidate set `output/candidate_pairs.tsv`. The method is described
 in `Documentation_template.md` at the root of the archive.
