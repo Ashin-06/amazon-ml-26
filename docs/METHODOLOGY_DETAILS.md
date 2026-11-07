@@ -1,9 +1,6 @@
 <!-- Extended methodology (appendix to Documentation_template.md) -->
 # ML Challenge 2026: Business Entity Resolution Solution
 
-**Team Name:** [Your Team Name]
-**Team Members:** [List all team members]
-**Submission Date:** [Date]
 
 ---
 
@@ -55,7 +52,7 @@ context and one-S1-per-target assignment.
   Keys held by >300 targets are dropped. Score = Σ idf of shared keys (total, name, address).
 - **Kept per S1:** top-40 by total ∪ top-20 by name ∪ top-20 by address score. Name ties prefer targets with an empty
   address (no conflicting evidence).
-- **Candidate pairs:** train 106.4M (48 per S1); test [TBD from final run].
+- **Candidate pairs:** train 106.4M (48 per S1); test: see Documentation_template.md.
 - **How true matches were protected (full train split, all 2.21M S1, full target pool):**
 
 | Blocking version | Link recall | Oracle macro F0.5 (perfect matcher on candidates) |
@@ -93,8 +90,8 @@ single tuned τ.
 
 | Run | Blocking oracle | Holdout macro F0.5 | Public LB |
 |---|---|---|---|
-| v1 (single-stage, basic blocking) | 0.9656 | 0.9422 | [TBD] |
-| v4 (final pipeline) | 0.9890 | [TBD] | [TBD] |
+| v1 (single-stage, basic blocking) | 0.9656 | 0.9422 | not recorded |
+| v4 (final pipeline) | 0.9890 | not recorded | not recorded |
 
 - **Common false positives:** a different business at the same or next-door address (e.g. `1030` vs `1032 Sweet River Dr`);
   same generic name with an empty target address; "Shri"/"Sri"-prefixed sister companies at the same premises.
