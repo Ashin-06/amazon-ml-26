@@ -17,4 +17,6 @@ python -m venv .venv
 - [docs/QUALITY_REPORT.md](docs/QUALITY_REPORT.md): what was verified, and the limits
 - `submissions/`: what was submitted
 
+On Linux, LightGBM needs the OpenMP runtime: `sudo apt install libgomp1` if it's missing.
+
 `pyarrow` is newer here than in the submitted run, to pick up a security fix.
