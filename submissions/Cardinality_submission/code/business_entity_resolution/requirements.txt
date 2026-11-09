@@ -14,8 +14,8 @@ scipy==1.17.1
 threadpoolctl==3.6.0
 xgboost==3.0.0
 # Cross-encoder training/inference (CUDA GPU). Install torch from the CUDA 11.8 index:
-#   pip install torch==2.7.1 --index-url https://download.pytorch.org/whl/cu118
-torch==2.7.1
+#   pip install torch==2.13.0 --index-url https://download.pytorch.org/whl/cu118
+torch==2.13.0
 transformers==4.36.2
 tokenizers==0.15.2
 safetensors==0.5.3
