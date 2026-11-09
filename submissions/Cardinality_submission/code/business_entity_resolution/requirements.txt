@@ -16,7 +16,7 @@ xgboost==3.0.0
 # Cross-encoder training/inference (CUDA GPU). Install torch from the CUDA 11.8 index:
 #   pip install torch==2.7.1 --index-url https://download.pytorch.org/whl/cu118
 torch==2.7.1
-transformers==4.36.2
+transformers==5.10.1
 tokenizers==0.15.2
 safetensors==0.5.3
 sentencepiece==0.2.1
